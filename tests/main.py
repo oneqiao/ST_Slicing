@@ -14,6 +14,13 @@ from st_slicer.sema.builder import build_symbol_table
 from st_slicer.functional_blocks import extract_functional_blocks
 from st_slicer.block_context import build_completed_block
 
+from st_slicer.functional_blocks import (
+    compute_slice_nodes,
+    nodes_to_sorted_ast_stmts,
+    stmts_to_line_numbers,
+    build_parent_map_from_ir2ast,
+)
+
 
 def main():
     # 这里改成你想测试的 ST 文件名
@@ -21,6 +28,7 @@ def main():
     code = code_path.read_text(encoding="utf-8")
     code_lines = code.splitlines()
 
+    # 0) 解析 + AST
     tree = parse_st_code(code)
     builder = ASTBuilder(filename=str(code_path))
     pous = builder.visit(tree)
@@ -32,12 +40,11 @@ def main():
         # 1) IR
         irb = IRBuilder(pou_name=pou.name)
         for s in pou.body:
-            irb.lower_stmt(s)           
+            irb.lower_stmt(s)
         print(f"\n=== IR for POU {pou.name} ===")
+        # 如需调试 IR，可以取消下面注释：
         # for idx, ins in enumerate(irb.instrs):
-        #     # 如果 ins 是 dataclass，这样可以看到字段内容
         #     print(idx, vars(ins))
-
 
         # 2) CFG
         cfg_builder = CFGBuilder(irb.instrs)
@@ -61,11 +68,12 @@ def main():
 
         # 5) 构建“前驱风格”的 ProgramDependenceGraph（切片用）
         prog_pdg = build_program_dependence_graph(irb.instrs, raw_pdg)
-        #print("\n=== ProgramDependenceGraph (predecessor view) ===")
-        for nid, node in sorted(prog_pdg.nodes.items()):
-            preds = prog_pdg.predecessors(nid)
-            # if preds:
-            #     print(f"node {nid} <- {preds}")
+        # 如需查看每个节点的前驱，可以打开下面的调试输出：
+        # print("\n=== ProgramDependenceGraph (predecessor view) ===")
+        # for nid, node in sorted(prog_pdg.nodes.items()):
+        #     preds = prog_pdg.predecessors(nid)
+        #     if preds:
+        #         print(f"node {nid} <- {sorted(preds)}")
 
         # 6) 构符号表（project），再取当前 POU 的 symtab
         proj_symtab = build_symbol_table(pous)
@@ -87,30 +95,56 @@ def main():
             print("\nNo slicing criteria found for this POU.")
             continue
 
-        # 8) 一键“多准则切片 + 聚类 + 块大小规范化”
+        # === Debug: 对第一个 criterion 做“补全前/补全后”对比 ===
+        first_crit = criteria[0]
+        print(f"\n[DEBUG] Show control-structure completion effect for criterion: {first_crit}")
+
+        # 0) 构造 parent_map（用你刚刚修好的版本）
+        parent_map = build_parent_map_from_ir2ast(irb.ir2ast_stmt)
+
+        # 1) 先算这个准则的切片节点集合
+        slice_nodes = compute_slice_nodes(prog_pdg, first_crit.node_id)
+
+        # 2) 不做控制补全：parent_map 传空 dict
+        stmts_raw = nodes_to_sorted_ast_stmts(slice_nodes, irb.ir2ast_stmt, parent_map={})
+        raw_lines = stmts_to_line_numbers(stmts_raw, code_lines)
+
+        print("\n--- RAW slice without control completion ---")
+        print("Lines:", raw_lines)
+        for ln in raw_lines:
+            if 1 <= ln <= len(code_lines):
+                print(f"{ln:4d}: {code_lines[ln-1].rstrip()}")
+
+        # 3) 做控制补全：用真正的 parent_map
+        stmts_closed = nodes_to_sorted_ast_stmts(slice_nodes, irb.ir2ast_stmt, parent_map=parent_map)
+        closed_lines = stmts_to_line_numbers(stmts_closed, code_lines)
+
+        print("\n--- CLOSED slice with control completion ---")
+        print("Lines:", closed_lines)
+        for ln in closed_lines:
+            if 1 <= ln <= len(code_lines):
+                print(f"{ln:4d}: {code_lines[ln-1].rstrip()}")
+
+        # 8) 一键“多准则切片 + 聚类 + Stage 切分 + 块大小规范化”
+        #    extract_functional_blocks 内部会：
+        #      - 对每个准则做 backward slice；
+        #      - 用 overlap clustering 合并高度重叠的切片；
+        #      - 基于 Stage (stage/Stage) 做一次语义切分；
+        #      - 再用 min_lines / max_lines 做尺寸规范化。
         blocks = extract_functional_blocks(
             prog_pdg=prog_pdg,
             criteria=criteria,
             ir2ast_stmt=irb.ir2ast_stmt,
             code_lines=code_lines,
             overlap_threshold=0.5,  # 两个切片重叠比例 >= 0.5 就归为同一功能块
-            min_lines=20,           # 每个块至少 20 行
+            min_lines=20,           # 每个块至少 20 行（Stage 切分时也会用到）
             max_lines=150,          # 每个块最多 150 行
         )
 
-        print(f"\nTotal functional blocks (after size normalization): {len(blocks)}")
+        print(f"\nTotal functional blocks (after stage split + size normalization): {len(blocks)}")
 
         # 9) 对每个功能块做结构补全，生成独立 PROGRAM
         for idx, block in enumerate(blocks):
-            print(f"\n\n===== Functional Block #{idx} =====")
-            print(f"Lines in this block: {len(block.line_numbers)} -> {sorted(block.line_numbers)[:10]} ...")
-            print(f"Nodes in this block: {len(block.node_ids)}")
-
-            # print("\n--- ST code for this functional block (original snippet) ---")
-            # for ln in sorted(block.line_numbers):
-            #     print(f"{ln:4d}: {code_lines[ln-1].rstrip()}")
-
-            # 生成完整 PROGRAM（带 VAR 区）
             completed = build_completed_block(
                 block=block,
                 pou_name=pou.name,
@@ -119,8 +153,16 @@ def main():
                 block_index=idx,
             )
 
-            print("\n--- Completed ST program for this functional block ---")
-            print(completed.code)
+            # 写入 {pou.name}_all_blocks1.txt
+            out_all = code_path.parent / f"{pou.name}_all_blocks10.txt"
+
+            # 第一次写前可以清空一次文件（在 for 外面做一次即可）
+            # out_all.write_text("", encoding="utf-8")
+
+            with out_all.open("a", encoding="utf-8") as f:
+                f.write(f"\n===== BLOCK {idx} =====\n\n")
+                f.write(completed.code)
+                f.write("\n")
 
             # 如果你希望写成单独文件，可以取消下面注释：
             # out_name = f"{pou.name}_block_{idx}.st"
