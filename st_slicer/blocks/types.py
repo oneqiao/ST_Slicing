@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Set, Any, Dict, Optional
 
-from ..criteria import SlicingCriterion
+
 from ..ast.nodes import Stmt
 
 @dataclass
