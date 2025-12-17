@@ -22,6 +22,7 @@ from st_slicer.blocks.slice_ops import (
     build_parent_map_from_ir2ast,
 )
 from st_slicer.blocks.line_map import stmts_to_line_numbers
+from st_slicer.utils.save_pdg import load_pdg, save_pdg
 
 
 #计算切片代码的覆盖率
@@ -82,9 +83,9 @@ def add_coverage_fill_criteria(
 
     return new_criteria
 
-def main():
+def main(st_file:str):
     # 这里改成你想测试的 ST 文件名
-    code_path = Path(__file__).parent / "mc_movecircularrelative.st"
+    code_path = Path(__file__).parent / st_file
     code = code_path.read_text(encoding="utf-8")
     code_lines = code.splitlines()
 
@@ -113,27 +114,32 @@ def main():
         # 3) Def-Use（一定要把 ir2ast_stmt 传进去）
         du_analyzer = DefUseAnalyzer(cfg, ir2ast_stmt=irb.ir2ast_stmt)
         du_result = du_analyzer.analyze()
+        prog_pdg = load_pdg(code_path, pou.name)
+        if prog_pdg is None:
+            # 4) PDG（后继风格）
+            pdg_builder = PDGBuilder(cfg, du_result)
+            raw_pdg = pdg_builder.build()
 
-        # 4) PDG（后继风格）
-        pdg_builder = PDGBuilder(cfg, du_result)
-        raw_pdg = pdg_builder.build()
+            # print("\n=== PDG Data Dependencies ===")
+            # for src, dsts in sorted(raw_pdg.data_deps.items()):
+            #     print(f"{src} --data--> {sorted(dsts)}")
 
-        # print("\n=== PDG Data Dependencies ===")
-        # for src, dsts in sorted(raw_pdg.data_deps.items()):
-        #     print(f"{src} --data--> {sorted(dsts)}")
+            # print("\n=== PDG Control Dependencies ===")
+            # for src, dsts in sorted(raw_pdg.control_deps.items()):
+            #     print(f"{src} --ctrl--> {sorted(dsts)}")
 
-        # print("\n=== PDG Control Dependencies ===")
-        # for src, dsts in sorted(raw_pdg.control_deps.items()):
-        #     print(f"{src} --ctrl--> {sorted(dsts)}")
-
-        # 5) 构建“前驱风格”的 ProgramDependenceGraph（切片用）
-        prog_pdg = build_program_dependence_graph(irb.instrs, raw_pdg)
-        # 如需查看每个节点的前驱，可以打开下面的调试输出：
-        # print("\n=== ProgramDependenceGraph (predecessor view) ===")
-        # for nid, node in sorted(prog_pdg.nodes.items()):
-        #     preds = prog_pdg.predecessors(nid)
-        #     if preds:
-        #         print(f"node {nid} <- {sorted(preds)}")
+            # 5) 构建“前驱风格”的 ProgramDependenceGraph（切片用）
+            prog_pdg = build_program_dependence_graph(irb.instrs, raw_pdg)
+            # 如需查看每个节点的前驱，可以打开下面的调试输出：
+            # print("\n=== ProgramDependenceGraph (predecessor view) ===")
+            # for nid, node in sorted(prog_pdg.nodes.items()):
+            #     preds = prog_pdg.predecessors(nid)
+            #     if preds:
+            #         print(f"node {nid} <- {sorted(preds)}")
+            save_pdg(prog_pdg, code_path, pou.name)  # 落盘
+            print(f"[PDG built & cached for {pou.name}]")
+        else:
+            print(f"[PDG loaded from cache for {pou.name}]")
 
         # 6) 构符号表（project），再取当前 POU 的 symtab
         proj_symtab = build_symbol_table(pous)
@@ -241,4 +247,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main("mc_movecircularrelative.st")
