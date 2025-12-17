@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Set, Dict
+import re
 
 from .functional_blocks import FunctionalBlock, collect_vars_in_block
 
@@ -71,34 +72,21 @@ def build_completed_block(
     code_lines: List[str],
     block_index: int,
 ) -> CompletedBlock:
-    """
-    根据一个 FunctionalBlock + 原 POU 的符号表，生成一个完整可编译的 ST 程序代码串。
-
-    参数:
-      - block: 功能块（包含 node_ids / stmts / line_numbers）
-      - pou_name: 原 POU 名字，用来生成 PROGRAM 名
-      - pou_symtab: 符号表，对应 build_symbol_table(...).get_pou(pou_name)
-      - code_lines: 原 ST 源码的按行列表
-      - block_index: 当前块索引，用于 PROGRAM 名后缀
-    """
-
-    # 1) 收集块中使用到的变量名（只来自 AST / 语句）
+    ...
+    # 1) 收集块中使用到的变量名（基于 AST / 语句）
     vars_used: Set[str] = collect_vars_in_block(block.stmts)
 
-    # 2) 构建 name -> symbol 的映射
+    # 2) 构建 name -> symbol
     sym_by_name: Dict[str, object] = {
         sym.name: sym
         for sym in pou_symtab.get_all_symbols()
     }
 
-    # 各类声明收集
-    fb_instance_decls: List[str] = []   # 功能块实例，例如 FB_S_Type_...
-    var_input_decls: List[str] = []     # VAR_INPUT
-    var_output_decls: List[str] = []    # VAR_OUTPUT
-    var_local_decls: List[str] = []     # 普通 VAR
-    # ★ 不再维护 stub_decls
+    fb_instance_decls: List[str] = []
+    var_input_decls: List[str] = []
+    var_output_decls: List[str] = []
+    var_local_decls: List[str] = []
 
-    # 一些“明显是函数/系统功能，而非变量或 FB 实例”的名字，可以直接忽略
     known_func_like_prefixes = ("MC_", "F_", "REAL_TO_", "UDINT_TO_", "DINT_TO_")
     known_func_like_names = {
         "ESQR",
@@ -107,87 +95,96 @@ def build_completed_block(
         "DINT_TO_REAL",
     }
 
-    # 3) 逐个变量分类
+    # 3) 先按 AST 使用情况做一轮粗过滤 + 分类
+    local_var_names: Set[str] = set()   # 暂存普通 VAR 的名字，待会再按文本剪一刀
+
     for v in sorted(vars_used):
         sym = sym_by_name.get(v)
 
-        # 3.1 在符号表中找不到
         if sym is None:
-            # 像 MC_RdAxisPar_FL、系统函数一类的：直接忽略，不声明
             if v.upper().startswith(known_func_like_prefixes) or v in known_func_like_names:
                 continue
-
-            # ★ 关键修改：其它未知名字也不再兜底生成 stub 变量
-            # 认为它可能是全局变量 / 外部库变量 / 常量，由工程环境解决
+            # 其他未知名字，认为由工程环境提供：直接忽略
             continue
 
-        # 3.2 在符号表中找得到，判断它的 “角色” 和 “存储类别”
         storage = (getattr(sym, "storage", "") or "").upper()
         v_type = getattr(sym, "type", "REAL")
-
-        # role/kind 可能在不同实现里字段名不一样，这里都尝试一下
         role = (
             (getattr(sym, "role", "") or "")
             or (getattr(sym, "kind", "") or "")
         ).upper()
 
-        # 3.2.1 功能块实例（FB instance），需要放在 VAR 区里： name : FBType;
+        # FB 实例
         if role in ("FB", "FUNCTION_BLOCK", "FB_INSTANCE"):
             fb_instance_decls.append(f"    {sym.name} : {v_type};")
             continue
 
-        # 3.2.2 函数 / 程序 / 方法之类：不需要在本块里声明
+        # 函数 / 程序 / 方法等，不在本块声明
         if role in ("FUNCTION", "FUNC", "METHOD", "ACTION", "PROGRAM"):
             continue
 
-        # 3.2.3 普通变量，根据 storage 放到 VAR_INPUT / VAR_OUTPUT / VAR
-        decl = f"    {sym.name} : {v_type};"
-
+        # 普通变量，先暂存，后面按文本再裁一次
         if storage == "VAR_INPUT":
-            var_input_decls.append(decl)
+            var_input_decls.append(f"    {sym.name} : {v_type};")
         elif storage == "VAR_OUTPUT":
-            var_output_decls.append(decl)
+            var_output_decls.append(f"    {sym.name} : {v_type};")
         else:
-            var_local_decls.append(decl)
+            # 普通 VAR 先不直接生成声明，先记下名字
+            local_var_names.add(sym.name)
 
-    # 4) 组装 PROGRAM 框架
+    # 3bis) 基于当前 block 的源码文本，再对局部 VAR 做一次“真使用”过滤
+    body_lines: List[str] = []
+    for ln in sorted(block.line_numbers):
+        if 1 <= ln <= len(code_lines):
+            body_lines.append(code_lines[ln - 1])
+
+    body_text = "\n".join(body_lines)
+
+    # 简单标识符提取，用于判断名字是否真的出现在当前块源码中
+    name_pattern = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+    body_used_names: Set[str] = set(name_pattern.findall(body_text))
+
+    for name in sorted(local_var_names):
+        if name in body_used_names:
+            sym = sym_by_name[name]
+            v_type = getattr(sym, "type", "REAL")
+            var_local_decls.append(f"    {name} : {v_type};")
+        else:
+            # 这里只是给调试看，确认有哪些被裁掉
+            # print(f"[DEBUG] drop unused local var in block {block_index}: {name}")
+            pass
+
+    # 4) 组装 PROGRAM 框架（下面保持你原来的逻辑，只是用新的 var_local_decls）
     prog_name = f"{pou_name}_BLOCK_{block_index}"
     out_lines: List[str] = []
 
     out_lines.append(f"PROGRAM {prog_name}")
 
-    # 4.1 功能块实例（FB 实例）放在一个 VAR 区（如果你想单独分区也可以调整）
     if fb_instance_decls:
         out_lines.append("VAR")
         out_lines.extend(fb_instance_decls)
         out_lines.append("END_VAR")
 
-    # 4.2 VAR_INPUT 区
     if var_input_decls:
         out_lines.append("VAR_INPUT")
         out_lines.extend(var_input_decls)
         out_lines.append("END_VAR")
 
-    # 4.3 VAR_OUTPUT 区
     if var_output_decls:
         out_lines.append("VAR_OUTPUT")
         out_lines.extend(var_output_decls)
         out_lines.append("END_VAR")
 
-    # 4.4 普通 VAR（不再拼接 stub_decls）
     if var_local_decls:
         out_lines.append("VAR")
         out_lines.extend(var_local_decls)
         out_lines.append("END_VAR")
 
     out_lines.append("")
-
-    # 5) 功能块主体代码：从原源码按行号直接拷贝
     out_lines.append("(* ===== Functional body from original code ===== *)")
     for ln in sorted(block.line_numbers):
         if 1 <= ln <= len(code_lines):
             out_lines.append(code_lines[ln - 1].rstrip())
-
     out_lines.append("END_PROGRAM")
 
     code = "\n".join(out_lines)
