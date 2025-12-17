@@ -96,6 +96,52 @@ class CallStmt(Stmt):
     args: List[Expr]
     loc: SourceLocation
 
+@dataclass(eq=False)
+class WhileStmt(Stmt):
+    cond: Expr
+    body: List[Stmt]
+    loc: SourceLocation
+
+
+@dataclass(eq=False)
+class RepeatStmt(Stmt):
+    body: List[Stmt]
+    until: Expr
+    loc: SourceLocation
+
+
+@dataclass(eq=False)
+class CaseCond:
+    """
+    CASE 分支条件：直接保留语法原文（支持 1 / 1..5 / cast / IDENTIFIER 等）
+    """
+    text: str
+    loc: SourceLocation
+
+
+@dataclass(eq=False)
+class CaseEntry:
+    """
+    CASE 的一个分支：
+      conds:   多个 case_condition（逗号分隔）
+      body:    COLON 后的 statement_list
+    """
+    conds: List[CaseCond]
+    body: List[Stmt]
+    loc: SourceLocation
+
+
+@dataclass(eq=False)
+class CaseStmt(Stmt):
+    """
+    CASE cond OF
+       ...
+    END_CASE
+    """
+    cond: Expr
+    entries: List[CaseEntry]
+    else_body: List[Stmt] = field(default_factory=list)
+    loc: SourceLocation = None
 
 # ===== POU / Program units =====
 

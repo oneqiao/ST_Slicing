@@ -24,6 +24,11 @@ from .nodes import (
     ArrayAccess,
     FieldAccess,
     CallExpr,   #新增
+    CaseStmt,
+    CaseEntry,
+    CaseCond,
+    WhileStmt,
+    RepeatStmt,
     # 如果你在 nodes.py 里有 UnaryOp，可以自己改成用 UnaryOp
     # UnaryOp,
 )
@@ -273,9 +278,14 @@ class ASTBuilder(IEC61131ParserVisitor):
             return self.visit(ctx.invocation_statement())
         if ctx.if_statement():
             return self.visit(ctx.if_statement())
+        if ctx.case_statement():
+            return self.visit(ctx.case_statement())
         if ctx.for_statement():
             return self.visit(ctx.for_statement())
-        # 其它类型先不处理
+        if ctx.while_statement():
+            return self.visit(ctx.while_statement())
+        if ctx.repeat_statement():
+            return self.visit(ctx.repeat_statement())
         return None
 
     # --- 赋值语句 ---
@@ -404,9 +414,50 @@ class ASTBuilder(IEC61131ParserVisitor):
             loc=self._loc(ctx),
         )
 
+    def visitCase_statement(self, ctx: IEC61131Parser.Case_statementContext) -> CaseStmt:
+        """
+        case_statement
+        : CASE cond=expression OF
+            (case_entry)+
+            (ELSE COLON? elselist=statement_list)?
+            END_CASE
+        ;
+        """
 
-    
+        # selector expression
+        selector = self.visit(ctx.cond)
 
+        entries: List[CaseEntry] = []
+        for ectx in ctx.case_entry():
+            # case_entry
+            #   : case_condition (COMMA case_condition)*
+            #     COLON statement_list
+            #   ;
+            conds: List[CaseCond] = []
+            for cctx in ectx.case_condition():
+                conds.append(CaseCond(text=cctx.getText(), loc=self._loc(cctx)))
+
+            body = self.visit(ectx.statement_list())  # -> List[Stmt]
+
+            entries.append(
+                CaseEntry(
+                    conds=conds,
+                    body=body,
+                    loc=self._loc(ectx),
+                )
+            )
+
+        else_body: List[Stmt] = []
+        # 注意：elselist 在 g4 里是命名字段：elselist=statement_list
+        if ctx.elselist is not None:
+            else_body = self.visit(ctx.elselist)
+
+        return CaseStmt(
+            cond=selector,
+            entries=entries,
+            else_body=else_body,
+            loc=self._loc(ctx),
+        )
 
     # --- FOR 语句 ---
 
@@ -433,6 +484,27 @@ class ASTBuilder(IEC61131ParserVisitor):
             body=body_stmts,
             loc=self._loc(ctx),
         )
+    
+    def visitWhile_statement(self, ctx: IEC61131Parser.While_statementContext) -> WhileStmt:
+        """
+        while_statement
+        : WHILE expression DO statement_list END_WHILE
+        ;
+        """
+        cond = self.visit(ctx.expression())
+        body = self.visit(ctx.statement_list())
+        return WhileStmt(cond=cond, body=body, loc=self._loc(ctx))
+
+
+    def visitRepeat_statement(self, ctx: IEC61131Parser.Repeat_statementContext) -> RepeatStmt:
+        """
+        repeat_statement
+        : REPEAT statement_list UNTIL expression END_REPEAT
+        ;
+        """
+        body = self.visit(ctx.statement_list())
+        until = self.visit(ctx.expression())
+        return RepeatStmt(body=body, until=until, loc=self._loc(ctx))
 
     # ========= 表达式 =========
     # 表达式在 grammar 里有一堆带 #label 的备选，ANTLR 会生成对应的 *Context，

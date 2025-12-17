@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from typing import List, Set, Dict
 import re
 
-from .functional_blocks import FunctionalBlock, collect_vars_in_block
-
+from st_slicer.blocks.types import FunctionalBlock
+from st_slicer.blocks.postprocess import collect_vars_in_block
+from st_slicer.blocks.render import render_block_text
 
 @dataclass
 class CompletedBlock:
@@ -64,13 +65,14 @@ def classify_variable(symbol):
         
     return ("normal_var", typ)
 
-
 def build_completed_block(
     block: FunctionalBlock,
     pou_name: str,
     pou_symtab,
     code_lines: List[str],
     block_index: int,
+    *,
+    normalize_else_only_if: bool = False,
 ) -> CompletedBlock:
     ...
     # 1) 收集块中使用到的变量名（基于 AST / 语句）
@@ -96,7 +98,7 @@ def build_completed_block(
     }
 
     # 3) 先按 AST 使用情况做一轮粗过滤 + 分类
-    local_var_names: Set[str] = set()   # 暂存普通 VAR 的名字，待会再按文本剪一刀
+    local_var_names: Set[str] = set()
 
     for v in sorted(vars_used):
         sym = sym_by_name.get(v)
@@ -104,7 +106,6 @@ def build_completed_block(
         if sym is None:
             if v.upper().startswith(known_func_like_prefixes) or v in known_func_like_names:
                 continue
-            # 其他未知名字，认为由工程环境提供：直接忽略
             continue
 
         storage = (getattr(sym, "storage", "") or "").upper()
@@ -114,33 +115,27 @@ def build_completed_block(
             or (getattr(sym, "kind", "") or "")
         ).upper()
 
-        # FB 实例
         if role in ("FB", "FUNCTION_BLOCK", "FB_INSTANCE"):
             fb_instance_decls.append(f"    {sym.name} : {v_type};")
             continue
 
-        # 函数 / 程序 / 方法等，不在本块声明
         if role in ("FUNCTION", "FUNC", "METHOD", "ACTION", "PROGRAM"):
             continue
 
-        # 普通变量，先暂存，后面按文本再裁一次
         if storage == "VAR_INPUT":
             var_input_decls.append(f"    {sym.name} : {v_type};")
         elif storage == "VAR_OUTPUT":
             var_output_decls.append(f"    {sym.name} : {v_type};")
         else:
-            # 普通 VAR 先不直接生成声明，先记下名字
             local_var_names.add(sym.name)
 
-    # 3bis) 基于当前 block 的源码文本，再对局部 VAR 做一次“真使用”过滤
-    body_lines: List[str] = []
-    for ln in sorted(block.line_numbers):
-        if 1 <= ln <= len(code_lines):
-            body_lines.append(code_lines[ln - 1])
+    # 3bis) 用“最终将输出的 body 文本”做一次真使用过滤（与输出一致）
+    body_text = render_block_text(
+        block,
+        code_lines,
+        normalize_else_only_if=normalize_else_only_if,
+    )
 
-    body_text = "\n".join(body_lines)
-
-    # 简单标识符提取，用于判断名字是否真的出现在当前块源码中
     name_pattern = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
     body_used_names: Set[str] = set(name_pattern.findall(body_text))
 
@@ -149,12 +144,8 @@ def build_completed_block(
             sym = sym_by_name[name]
             v_type = getattr(sym, "type", "REAL")
             var_local_decls.append(f"    {name} : {v_type};")
-        else:
-            # 这里只是给调试看，确认有哪些被裁掉
-            # print(f"[DEBUG] drop unused local var in block {block_index}: {name}")
-            pass
 
-    # 4) 组装 PROGRAM 框架（下面保持你原来的逻辑，只是用新的 var_local_decls）
+    # 4) 组装 PROGRAM 框架
     prog_name = f"{pou_name}_BLOCK_{block_index}"
     out_lines: List[str] = []
 
@@ -182,9 +173,7 @@ def build_completed_block(
 
     out_lines.append("")
     out_lines.append("(* ===== Functional body from original code ===== *)")
-    for ln in sorted(block.line_numbers):
-        if 1 <= ln <= len(code_lines):
-            out_lines.append(code_lines[ln - 1].rstrip())
+    out_lines.append(body_text.rstrip("\n"))
     out_lines.append("END_PROGRAM")
 
     code = "\n".join(out_lines)
