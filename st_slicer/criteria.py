@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from .slicer import SlicingCriterion
+#from .slicer import SlicingCriterion
 from .pdg.pdg_builder import ProgramDependenceGraph
 from .dataflow.def_use import DefUseResult
 from .dataflow.var_access import VarAccess
@@ -43,7 +43,7 @@ class SlicingCriterion:
     kind: str
     variable: str
     extra: Optional[Dict[str, Any]] = None
-
+    
 
 # ======== 配置：控制 / 运动领域的通用启发式 =========
 
@@ -539,63 +539,63 @@ def discover_runtime_event_criteria(
 
     return criteria
 
-def discover_control_branch_criteria(
-    pdg: ProgramDependenceGraph,
-    du: DefUseResult,
-) -> List[SlicingCriterion]:
-    """
-    通用分支准则（control_branch）：
+# def discover_control_branch_criteria(
+#     pdg: ProgramDependenceGraph,
+#     du: DefUseResult,
+# ) -> List[SlicingCriterion]:
+#     """
+#     通用分支准则（control_branch）：
 
-    - 对每个 IF / ELSIF / CASE 分支头部，对应的 PDG 节点生成一个切片准则。
-    - 仅依赖 AST 结构，不依赖变量名或领域知识。
+#     - 对每个 IF / ELSIF / CASE 分支头部，对应的 PDG 节点生成一个切片准则。
+#     - 仅依赖 AST 结构，不依赖变量名或领域知识。
 
-    需要：
-      - pdg.node_to_ast: Dict[int, AstNode]
-      - AST 节点类型名中包含:
-            "IfStmt", "ElsifBranch", "CaseStmt", "CaseElement" 等
-      - 如果工程里类型名不同，可把下面的 class_name 判断改成自己的名字。
-    """
-    criteria: List[SlicingCriterion] = []
+#     需要：
+#       - pdg.node_to_ast: Dict[int, AstNode]
+#       - AST 节点类型名中包含:
+#             "IfStmt", "ElsifBranch", "CaseStmt", "CaseElement" 等
+#       - 如果工程里类型名不同，可把下面的 class_name 判断改成自己的名字。
+#     """
+#     criteria: List[SlicingCriterion] = []
 
-    # 没有 AST 映射就直接返回空，避免破坏原有行为
-    if not hasattr(pdg, "node_to_ast"):
-        return criteria
+#     # 没有 AST 映射就直接返回空，避免破坏原有行为
+#     if not hasattr(pdg, "node_to_ast"):
+#         return criteria
 
-    for node_id in pdg.nodes.keys():
-        if node_id < 0 or node_id >= len(du.def_vars):
-            continue
+#     for node_id in pdg.nodes.keys():
+#         if node_id < 0 or node_id >= len(du.def_vars):
+#             continue
 
-        ast_node = _get_ast_node_for_pdg_node(pdg, node_id)
-        if ast_node is None:
-            continue
+#         ast_node = _get_ast_node_for_pdg_node(pdg, node_id)
+#         if ast_node is None:
+#             continue
 
-        cls_name = type(ast_node).__name__
+#         cls_name = type(ast_node).__name__
 
-        # IF / ELSIF 分支头
-        if cls_name in ("IfStmt", "ElsifBranch"):
-            criteria.append(
-                SlicingCriterion(
-                    node_id=node_id,
-                    kind="control_branch",
-                    variable="<if_branch>",
-                    extra={"ast_type": cls_name},
-                )
-            )
-            continue
+#         # IF / ELSIF 分支头
+#         if cls_name in ("IfStmt", "ElsifBranch"):
+#             criteria.append(
+#                 SlicingCriterion(
+#                     node_id=node_id,
+#                     kind="control_branch",
+#                     variable="<if_branch>",
+#                     extra={"ast_type": cls_name},
+#                 )
+#             )
+#             continue
 
-        # CASE / CASE 分支
-        if cls_name in ("CaseStmt", "CaseElement"):
-            criteria.append(
-                SlicingCriterion(
-                    node_id=node_id,
-                    kind="control_branch",
-                    variable="<case_branch>",
-                    extra={"ast_type": cls_name},
-                )
-            )
-            continue
+#         # CASE / CASE 分支
+#         if cls_name in ("CaseStmt", "CaseElement"):
+#             criteria.append(
+#                 SlicingCriterion(
+#                     node_id=node_id,
+#                     kind="control_branch",
+#                     variable="<case_branch>",
+#                     extra={"ast_type": cls_name},
+#                 )
+#             )
+#             continue
 
-    return criteria
+#     return criteria
 
 def discover_control_branch_criteria(
     pdg: ProgramDependenceGraph,

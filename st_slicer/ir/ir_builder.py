@@ -11,6 +11,9 @@ from ..ast.nodes import (
     IfStmt,
     ForStmt,
     CallStmt,
+    CaseStmt,
+    WhileStmt,
+    RepeatStmt,
     VarRef,
     Literal,
     BinOp,
@@ -166,10 +169,15 @@ class IRBuilder:
             self._lower_if(stmt)
         elif isinstance(stmt, ForStmt):
             self._lower_for(stmt)
+        elif isinstance(stmt, WhileStmt):
+            self._lower_while(stmt)
+        elif isinstance(stmt, RepeatStmt):
+            self._lower_repeat(stmt)
+        elif isinstance(stmt, CaseStmt):
+            self._lower_case(stmt)
         elif isinstance(stmt, CallStmt):
             self._lower_call(stmt)
         else:
-            # 其他语句先忽略
             pass
 
     # ========= 各类语句 =========
@@ -374,3 +382,77 @@ class IRBuilder:
             ),
             ast_stmt=stmt,
         )
+    
+    def _lower_while(self, stmt: WhileStmt):
+        label_head = self.new_label("while_head")
+        label_body = self.new_label("while_body")
+        label_end  = self.new_label("while_end")
+
+        self.emit(IRLabel(name=label_head, loc=self._loc(stmt)), ast_stmt=stmt)
+
+        cond_var = self.lower_expr(stmt.cond)
+        self.emit(
+            IRBranchCond(cond=cond_var, true_label=label_body, false_label=label_end, loc=self._loc(stmt)),
+            ast_stmt=stmt,
+        )
+
+        self.emit(IRLabel(name=label_body, loc=self._loc(stmt)), ast_stmt=stmt)
+        for s in stmt.body:
+            self.lower_stmt(s)
+
+        self.emit(IRGoto(target_label=label_head, loc=self._loc(stmt)), ast_stmt=stmt)
+        self.emit(IRLabel(name=label_end, loc=self._loc(stmt)), ast_stmt=stmt)
+
+    def _lower_repeat(self, stmt: RepeatStmt):
+        label_body = self.new_label("repeat_body")
+        label_end  = self.new_label("repeat_end")
+
+        self.emit(IRLabel(name=label_body, loc=self._loc(stmt)), ast_stmt=stmt)
+
+        for s in stmt.body:
+            self.lower_stmt(s)
+
+        # REPEAT ... UNTIL cond END_REPEAT
+        # UNTIL 为真则退出，否则继续
+        until_var = self.lower_expr(stmt.until)
+        self.emit(
+            IRBranchCond(cond=until_var, true_label=label_end, false_label=label_body, loc=self._loc(stmt)),
+            ast_stmt=stmt,
+        )
+        self.emit(IRLabel(name=label_end, loc=self._loc(stmt)), ast_stmt=stmt)
+
+    def _lower_case(self, stmt: CaseStmt):
+        label_end  = self.new_label("endcase")
+        label_else = self.new_label("case_else") if stmt.else_body else None
+
+        # 让所有分支至少控制依赖于 selector（保守，不做精确标签匹配）
+        cond_var = self.lower_expr(stmt.cond)
+
+        next_label = None
+        for i, entry in enumerate(stmt.entries):
+            label_branch = self.new_label(f"case_{i}")
+            next_label = self.new_label(f"case_next_{i}") if i < len(stmt.entries) - 1 else (label_else or label_end)
+
+            # 保守：以 cond_var 作为“是否进入该分支”的门控
+            self.emit(
+                IRBranchCond(cond=cond_var, true_label=label_branch, false_label=next_label, loc=self._loc(stmt)),
+                ast_stmt=stmt,
+            )
+
+            self.emit(IRLabel(name=label_branch, loc=self._loc(stmt)), ast_stmt=stmt)
+            for s in entry.body:
+                self.lower_stmt(s)
+            self.emit(IRGoto(target_label=label_end, loc=self._loc(stmt)), ast_stmt=stmt)
+
+            # next label
+            self.emit(IRLabel(name=next_label, loc=self._loc(stmt)), ast_stmt=stmt)
+
+        if stmt.else_body and label_else is not None:
+            # 如果上面最后一个 next_label 已经是 label_else，这里会再落一次 else；可按你的实现微调
+            self.emit(IRLabel(name=label_else, loc=self._loc(stmt)), ast_stmt=stmt)
+            for s in stmt.else_body:
+                self.lower_stmt(s)
+            self.emit(IRGoto(target_label=label_end, loc=self._loc(stmt)), ast_stmt=stmt)
+
+        self.emit(IRLabel(name=label_end, loc=self._loc(stmt)), ast_stmt=stmt)
+
