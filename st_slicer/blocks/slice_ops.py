@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..slicer import backward_slice
-from ..criteria import SlicingCriterion
+
 from ..ast.nodes import Stmt, IfStmt, ForStmt, CaseStmt, WhileStmt, RepeatStmt
 
 
