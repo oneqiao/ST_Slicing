@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Set, Literal, Optional, Dict
 
 from .pdg.pdg_builder import ProgramDependenceGraph
-from blocks.types import SlicingCriterion
+from st_slicer.blocks.core import SlicingCriterion
 
 def backward_slice(
     pdg: ProgramDependenceGraph,

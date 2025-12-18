@@ -16,13 +16,12 @@ from collections import Counter
 from st_slicer.functional_blocks import extract_functional_blocks
 from st_slicer.block_context import build_completed_block
 
-from st_slicer.blocks.slice_ops import (
+from st_slicer.blocks.pipeline import (
     compute_slice_nodes,
     nodes_to_sorted_ast_stmts,
     build_parent_map_from_ir2ast,
+    stmts_to_line_numbers,
 )
-from st_slicer.blocks.line_map import stmts_to_line_numbers
-
 
 #计算切片代码的覆盖率
 def report_coverage(blocks, code_lines):
@@ -84,7 +83,7 @@ def add_coverage_fill_criteria(
 
 def main():
     # 这里改成你想测试的 ST 文件名
-    code_path = Path(__file__).parent / "mc_movecircularrelative.st"
+    code_path = Path(__file__).parent / "mc_moveabsolute.st"
     code = code_path.read_text(encoding="utf-8")
     code_lines = code.splitlines()
 
@@ -204,7 +203,7 @@ def main():
             criteria=criteria,
             ir2ast_stmt=irb.ir2ast_stmt,
             code_lines=code_lines,
-            overlap_threshold=0.9,  # 两个切片重叠比例 >= 0.5 就归为同一功能块
+            overlap_threshold=0.5,  # 两个切片重叠比例 >= 0.5 就归为同一功能块
             min_lines=8,           # 每个块至少 20 行（Stage 切分时也会用到）
             max_lines=150,          # 每个块最多 150 行
         )
@@ -212,9 +211,9 @@ def main():
         #覆盖率
         report_coverage(blocks, code_lines)
 
-        print(f"\nTotal functional blocks (after stage split + size normalization): {len(blocks)}")
+        print(f"\nTotal functional blocks : {len(blocks)}")
 
-        out_all = code_path.parent / f"{pou.name}_all_blocks14.txt"
+        out_all = code_path.parent / f"{pou.name}_all_blocks11.txt"
         out_all.write_text("", encoding="utf-8")  # 每次运行清空，避免历史累积干扰判断
 
         # 9) 对每个功能块做结构补全，生成独立 PROGRAM

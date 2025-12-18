@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import List, Set, Dict
 import re
 
-from st_slicer.blocks.types import FunctionalBlock
-from st_slicer.blocks.postprocess import collect_vars_in_block
+from st_slicer.blocks.core import FunctionalBlock
+from st_slicer.blocks.pipeline import collect_vars_in_block
 from st_slicer.blocks.render import render_block_text
 
 @dataclass
