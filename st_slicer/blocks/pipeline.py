@@ -26,6 +26,7 @@ from .structure import (
     scan_matching_end_if, scan_matching_end_case,
     scan_matching_end_for, scan_matching_end_while, scan_matching_end_repeat,
     patch_if_structure, patch_case_structure,
+    patch_loop_structures,
     fold_half_empty_ifs_in_block,
 )
 
@@ -100,7 +101,15 @@ def stmts_to_line_numbers(stmts: List[Stmt], code_lines: List[str]) -> List[int]
 # =========================================================
 # 2) PDG slice + clustering
 # =========================================================
-def compute_slice_nodes(prog_pdg, start_nodes: Union[int, Iterable[int], None]) -> Set[int]:
+def compute_slice_nodes(
+    prog_pdg,
+    start_nodes: Union[int, Iterable[int], None],
+    *,
+    var_sensitive: bool = False,
+    seed_vars: Optional[Iterable[str]] = None,
+    use_data: bool = True,
+    use_control: bool = True,
+) -> Set[int]:
     if start_nodes is None:
         starts: List[int] = []
     elif isinstance(start_nodes, int):
@@ -111,7 +120,15 @@ def compute_slice_nodes(prog_pdg, start_nodes: Union[int, Iterable[int], None]) 
     if not starts:
         return set()
 
-    return backward_slice(prog_pdg, starts)
+    return backward_slice(
+        prog_pdg,
+        starts,
+        use_data=use_data,
+        use_control=use_control,
+        var_sensitive=var_sensitive,
+        seed_vars=seed_vars,
+    )
+
 
 def _jaccard(a: Set[int], b: Set[int]) -> float:
     if not a and not b:
@@ -292,6 +309,7 @@ def _build_block_from_lines(
     base_lines = stmts_to_line_numbers(sub_stmts, code_lines)
     fixed = patch_if_structure(base_lines, code_lines, ensure_end_if=True)
     fixed = patch_case_structure(fixed, code_lines, ensure_end_case=True, include_branch_headers=True)
+    fixed = patch_loop_structures(fixed, code_lines, include_header_span=True, include_until_span=True)
 
     return FunctionalBlock(
         criteria=list(parent_block.criteria),
@@ -542,17 +560,44 @@ def collect_vars_in_block(stmts: List[Stmt]) -> Set[str]:
 # =========================================================
 # 6) Postprocess (empty structures, dedup, meaningful)
 # =========================================================
-def is_meaningful_block(block: FunctionalBlock, code_lines: List[str], *, min_len: int = 10) -> bool:
-    lines = [code_lines[ln - 1] for ln in sorted(block.line_numbers) if 1 <= ln <= len(code_lines)]
+def is_meaningful_block(block, code_lines, min_len=8):
+    lines = sorted(set(block.line_numbers or []))
     if len(lines) < min_len:
         return False
-    depth = 0
-    went_negative = False
-    for t in lines:
-        depth = update_ctrl_depth(t, depth, clamp_negative=False)
-        if depth < 0:
-            went_negative = True
-    return (depth == 0) and (not went_negative)
+
+    # 统计非空、非注释行
+    def is_code(s: str) -> bool:
+        t = s.strip()
+        if not t:
+            return False
+        if t.startswith("//"):
+            return False
+        if t.startswith("(*") and t.endswith("*)"):
+            return False
+        return True
+
+    texts = [code_lines[i-1] for i in lines if 1 <= i <= len(code_lines)]
+    texts = [t for t in texts if is_code(t)]
+
+    # 关键：全是结构性关键字而没有“动作语句”，判为无意义
+    structural = ("IF", "THEN", "ELSE", "ELSIF", "END_IF", "CASE", "OF", "END_CASE",
+                  "FOR", "TO", "DO", "END_FOR", "WHILE", "END_WHILE", "REPEAT", "UNTIL", "END_REPEAT")
+    action_hits = 0
+    for t in texts:
+        tt = t.strip()
+        if ":=" in tt:
+            action_hits += 1
+        elif "(" in tt and ")" in tt and not any(tt.startswith(k) for k in structural):
+            # 粗略认为函数/FB 调用
+            action_hits += 1
+        elif "stage :=" in tt or "stage :=" in tt.replace(" ", ""):
+            action_hits += 1
+
+    if action_hits == 0:
+        return False
+
+    return True
+
 
 def _has_nonblank_inside(ln_set: Set[int], code_lines: List[str], a: int, b: int) -> bool:
     for ln in ln_set:

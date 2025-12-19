@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Set, Optional, Literal, Tuple
+from typing import Dict, Set, Optional, Literal, Tuple, List, Union
 
 from ..ir.ir_nodes import IRInstr, IRBranchCond
 from ..cfg.cfg_builder import InstrCFG
@@ -240,53 +240,92 @@ class PdgNode:
     ast_node: object
     lineno: Optional[int] = None
 
-
 @dataclass
 class ProgramDependenceGraph:
-    """
-    为切片算法提供的“前驱”风格 PDG：
-      - data_pred[v] ：所有对 v 有数据依赖的前驱节点集合
-      - ctrl_pred[v] ：所有对 v 有控制依赖的前驱节点集合
-    """
     nodes: Dict[int, PdgNode] = field(default_factory=dict)
     data_pred: Dict[int, Set[int]] = field(default_factory=dict)
     ctrl_pred: Dict[int, Set[int]] = field(default_factory=dict)
 
+    # 新增：node defs/uses（用于变量敏感切片的 fallback 过滤）
+    node_defs: Dict[int, Set[str]] = field(default_factory=dict)
+    node_uses: Dict[int, Set[str]] = field(default_factory=dict)
+
+    # 新增：data 边标签（dst -> src -> {vars}）
+    data_pred_vars: Dict[int, Dict[int, Set[str]]] = field(default_factory=dict)
+
     def add_node(self, node_id: int, ast_node, lineno: Optional[int] = None):
         self.nodes[node_id] = PdgNode(node_id, ast_node, lineno)
 
-    def add_data_edge(self, src: int, dst: int):
+    def add_data_edge(self, src: int, dst: int, var: Optional[str] = None):
         self.data_pred.setdefault(dst, set()).add(src)
+        if var:
+            self.data_pred_vars.setdefault(dst, {}).setdefault(src, set()).add(var)
 
     def add_ctrl_edge(self, src: int, dst: int):
         self.ctrl_pred.setdefault(dst, set()).add(src)
 
-    def predecessors(self, node_id: int) -> List[Tuple[int, EdgeType]]:
-        res: List[Tuple[int, EdgeType]] = []
+    def predecessors(
+        self,
+        node_id: int,
+        include_var: bool = False,
+    ) -> List[Union[Tuple[int, EdgeType], Tuple[int, EdgeType, str]]]:
+        res: List[Union[Tuple[int, EdgeType], Tuple[int, EdgeType, str]]] = []
+
+        # data predecessors
         for p in self.data_pred.get(node_id, ()):
+            if include_var:
+                vset = self.data_pred_vars.get(node_id, {}).get(p)
+                if vset:
+                    for v in vset:
+                        res.append((p, "data", v))
+                    continue
             res.append((p, "data"))
+
+        # control predecessors
         for p in self.ctrl_pred.get(node_id, ()):
             res.append((p, "control"))
+
         return res
 
 
-def build_program_dependence_graph(ir_instrs: List[IRInstr], pdg: PDG) -> ProgramDependenceGraph:
+def build_program_dependence_graph(
+    ir_instrs: List[IRInstr],
+    pdg: PDG,
+    du: Optional[DefUseResult] = None,
+) -> ProgramDependenceGraph:
     """
-    辅助函数：把“后继风格”的 PDG 转换成“前驱风格”的 ProgramDependenceGraph，
-    方便切片算法使用。
+    把“后继风格”的 PDG 转换成“前驱风格”的 ProgramDependenceGraph，
+    并可选挂载 def/use 与 data-edge var 标签，用于变量敏感切片。
     """
     g = ProgramDependenceGraph()
 
-    # 1. 建节点（这里直接把 IR 指令作为 ast_node 绑定）
+    # 1) 建节点（绑定 IR 指令，并修复 lineno）
     for idx, instr in enumerate(ir_instrs):
-        lineno = getattr(instr, "lineno", None)
+        lineno = None
+        loc = getattr(instr, "loc", None)
+        if loc is not None:
+            lineno = getattr(loc, "line", None)
         g.add_node(idx, ast_node=instr, lineno=lineno)
 
-    # 2. 把 data_deps/control_deps 反向成前驱
-    for src, dsts in pdg.data_deps.items():
-        for dst in dsts:
-            g.add_data_edge(src, dst)
+    # 2) data edges：优先用 du.def2uses（可带 var 标签），否则退化用 pdg.data_deps
+    if du is not None:
+        # 挂载 node defs/uses（供 slicer fallback 使用）
+        for i in range(len(ir_instrs)):
+            if 0 <= i < len(du.def_vars):
+                g.node_defs[i] = set(du.def_vars[i])
+            if 0 <= i < len(du.use_vars):
+                g.node_uses[i] = set(du.use_vars[i])
 
+        # 用 def2uses 生成带 var 标签的 data edge
+        for (def_idx, var), uses in du.def2uses.items():
+            for use_idx in uses:
+                g.add_data_edge(def_idx, use_idx, var=var)
+    else:
+        for src, dsts in pdg.data_deps.items():
+            for dst in dsts:
+                g.add_data_edge(src, dst)
+
+    # 3) control edges（保持不变）
     for src, dsts in pdg.control_deps.items():
         for dst in dsts:
             g.add_ctrl_edge(src, dst)

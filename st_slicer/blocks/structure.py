@@ -19,6 +19,10 @@ from .core import (
     FunctionalBlock,
 )
 
+RE_DO = re.compile(r"\bDO\b", re.IGNORECASE)
+RE_UNTIL = re.compile(r"^\s*UNTIL\b", re.IGNORECASE)
+
+
 # 控制结构层面的逻辑（扫描 END、扫描 IF 头、补齐 IF/CASE 结构、折叠半空 IF）。避免这些逻辑散落在渲染、行映射、后处理等位置。
 # -----------------------------
 # Generic end matching scanners
@@ -74,6 +78,26 @@ def scan_if_header_end(line_start: int, code_lines: List[str]) -> int:
     ln = line_start
     while ln <= n:
         if RE_THEN.search(clean_st_line(code_lines[ln - 1])):
+            return ln
+        ln += 1
+    return line_start
+
+def scan_for_header_end(line_start: int, code_lines: List[str]) -> int:
+    """FOR 头可能多行，扫描到包含 DO 的那一行。"""
+    n = len(code_lines)
+    ln = line_start
+    while ln <= n:
+        if RE_DO.search(clean_st_line(code_lines[ln - 1])):
+            return ln
+        ln += 1
+    return line_start
+
+def scan_while_header_end(line_start: int, code_lines: List[str]) -> int:
+    """WHILE 头可能多行，扫描到包含 DO 的那一行。"""
+    n = len(code_lines)
+    ln = line_start
+    while ln <= n:
+        if RE_DO.search(clean_st_line(code_lines[ln - 1])):
             return ln
         ln += 1
     return line_start
@@ -298,3 +322,182 @@ def patch_case_structure(
                         break
 
     return lines
+
+def _find_enclosing_head(
+    ln: int,
+    code_lines: List[str],
+    head_re: re.Pattern,
+    scan_end_fn,
+) -> Optional[Tuple[int, int]]:
+    """
+    给定命中行 ln，向上找最近的 head（FOR/WHILE/REPEAT），并确认其 end 覆盖 ln。
+    返回 (head_ln, end_ln) 或 None。
+    """
+    for up in range(ln, 0, -1):
+        u = clean_st_line(code_lines[up - 1]).strip()
+        if not u:
+            continue
+        if head_re.search(u):
+            end_ln = scan_end_fn(up, code_lines)
+            if end_ln >= ln:
+                return up, end_ln
+    return None
+
+
+def patch_for_structure(
+    line_numbers: Iterable[int],
+    code_lines: List[str],
+    *,
+    ensure_end_for: bool = True,
+    include_header_span: bool = True,
+) -> Set[int]:
+    """
+    只要切片命中 FOR 循环体中的任一行，则补齐：
+      - FOR 头（必要时补到 DO 结束行）
+      - END_FOR
+    """
+    n = len(code_lines)
+    lines: Set[int] = {int(x) for x in line_numbers if 1 <= int(x) <= n}
+    if not lines:
+        return lines
+
+    for ln in sorted(list(lines)):
+        hit = _find_enclosing_head(ln, code_lines, RE_FOR_HEAD, scan_matching_end_for)
+        if not hit:
+            continue
+        head_ln, end_ln = hit
+
+        # 命中在 (head, end) 内部才需要补（避免把 head/end 自己当命中触发错误扩张）
+        if not (head_ln < ln < end_ln):
+            continue
+
+        # 补头（含多行 header 到 DO）
+        lines.add(head_ln)
+        if include_header_span:
+            head_end = scan_for_header_end(head_ln, code_lines)
+            for k in range(head_ln, min(head_end, n) + 1):
+                lines.add(k)
+
+        # 补尾
+        if ensure_end_for and 1 <= end_ln <= n:
+            lines.add(end_ln)
+
+    return lines
+
+
+def patch_while_structure(
+    line_numbers: Iterable[int],
+    code_lines: List[str],
+    *,
+    ensure_end_while: bool = True,
+    include_header_span: bool = True,
+) -> Set[int]:
+    """
+    只要切片命中 WHILE 循环体中的任一行，则补齐：
+      - WHILE 头（必要时补到 DO 结束行）
+      - END_WHILE
+    """
+    n = len(code_lines)
+    lines: Set[int] = {int(x) for x in line_numbers if 1 <= int(x) <= n}
+    if not lines:
+        return lines
+
+    for ln in sorted(list(lines)):
+        hit = _find_enclosing_head(ln, code_lines, RE_WHILE_HEAD, scan_matching_end_while)
+        if not hit:
+            continue
+        head_ln, end_ln = hit
+        if not (head_ln < ln < end_ln):
+            continue
+
+        lines.add(head_ln)
+        if include_header_span:
+            head_end = scan_while_header_end(head_ln, code_lines)
+            for k in range(head_ln, min(head_end, n) + 1):
+                lines.add(k)
+
+        if ensure_end_while and 1 <= end_ln <= n:
+            lines.add(end_ln)
+
+    return lines
+
+
+def _find_until_line_same_level(repeat_ln: int, end_repeat_ln: int, code_lines: List[str]) -> Optional[int]:
+    """
+    在 repeat_ln..end_repeat_ln 内，找同层级的 UNTIL 行。
+    嵌套 REPEAT 需要跳过。
+    """
+    depth = 0
+    for ln in range(repeat_ln, end_repeat_ln + 1):
+        u = norm_line(code_lines[ln - 1])
+        if not u:
+            continue
+        if RE_REPEAT_HEAD.search(u):
+            depth += 1
+            continue
+        if RE_END_REPEAT.search(u):
+            depth -= 1
+            continue
+        if depth == 1 and RE_UNTIL.search(clean_st_line(code_lines[ln - 1]).strip()):
+            return ln
+    return None
+
+
+def patch_repeat_structure(
+    line_numbers: Iterable[int],
+    code_lines: List[str],
+    *,
+    ensure_end_repeat: bool = True,
+    include_until_span: bool = True,
+) -> Set[int]:
+    """
+    只要切片命中 REPEAT 循环体中的任一行，则补齐：
+      - REPEAT
+      - UNTIL ... （建议至少补 UNTIL 行；为可编译性，可选择补 UNTIL..END_REPEAT 区间）
+      - END_REPEAT
+    """
+    n = len(code_lines)
+    lines: Set[int] = {int(x) for x in line_numbers if 1 <= int(x) <= n}
+    if not lines:
+        return lines
+
+    for ln in sorted(list(lines)):
+        hit = _find_enclosing_head(ln, code_lines, RE_REPEAT_HEAD, scan_matching_end_repeat)
+        if not hit:
+            continue
+        head_ln, end_ln = hit
+        if not (head_ln < ln < end_ln):
+            continue
+
+        lines.add(head_ln)
+
+        until_ln = _find_until_line_same_level(head_ln, end_ln, code_lines)
+        if until_ln is not None:
+            # 至少补 UNTIL 行；若 include_until_span=True，则补 UNTIL..END_REPEAT 全段，保证条件完整
+            if include_until_span:
+                for k in range(until_ln, end_ln + 1):
+                    lines.add(k)
+            else:
+                lines.add(until_ln)
+
+        if ensure_end_repeat and 1 <= end_ln <= n:
+            lines.add(end_ln)
+
+    return lines
+
+
+def patch_loop_structures(
+    line_numbers: Iterable[int],
+    code_lines: List[str],
+    *,
+    include_header_span: bool = True,
+    include_until_span: bool = True,
+) -> Set[int]:
+    """
+    统一入口：对 FOR/WHILE/REPEAT 进行一致闭合补全。
+    """
+    fixed = set(int(x) for x in line_numbers)
+    fixed = patch_for_structure(fixed, code_lines, ensure_end_for=True, include_header_span=include_header_span)
+    fixed = patch_while_structure(fixed, code_lines, ensure_end_while=True, include_header_span=include_header_span)
+    fixed = patch_repeat_structure(fixed, code_lines, ensure_end_repeat=True, include_until_span=include_until_span)
+    return fixed

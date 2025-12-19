@@ -1,0 +1,8 @@
+{
+  "kind_policy": {
+    "api_call_set": {
+      "slice": { "use_control": false },
+      "post": { "patch_case": false }
+    }
+  }
+}

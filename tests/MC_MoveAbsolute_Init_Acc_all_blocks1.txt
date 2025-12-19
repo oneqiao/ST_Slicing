@@ -1,0 +1,1111 @@
+
+===== BLOCK 0 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_0
+VAR_INPUT
+    Axis_num : USINT;
+    Execute : BOOL;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Axis_numOut : USINT;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    s_all : REAL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF NOT Execute AND stage &lt;&gt; 3(* FBS_InBuffer *) AND stage &lt;&gt; 4(* FBS_Moving *) THEN
+    Done := FALSE;
+END_IF;
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+        Done := TRUE;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 1 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_1
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    direction : INT;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    stage : USINT;
+    t_all : REAL;
+    t_now : UDINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+        Done := FALSE;
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                        Done := TRUE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) OR run_mode = 4(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Done := TRUE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        ELSE                     // S 型模式
+            IF direction &lt;&gt; now_direction THEN // 先减速至0
+            ELSE
+                IF run_mode = 1(* RM_ACC_EQU_DEC *) OR run_mode = 2(* RM_DEC_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Done := TRUE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Done := TRUE;
+                    END_IF;
+                ELSIF run_mode = 4(* RM_BLENDING_EQU_ACC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Done := TRUE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 2 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_2
+VAR_INPUT
+    Axis_num : USINT;
+    Execute : BOOL;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Axis_numOut : USINT;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    s_all : REAL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF NOT Execute AND stage &lt;&gt; 3(* FBS_InBuffer *) AND stage &lt;&gt; 4(* FBS_Moving *) THEN
+    Active := FALSE;
+END_IF;
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+        Active := FALSE;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 3 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_3
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    direction : INT;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    stage : USINT;
+    t_all : REAL;
+    t_now : UDINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+        Active := FALSE;
+    ELSE
+        Active := TRUE;
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                        Active := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) OR run_mode = 4(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Active := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        ELSE                     // S 型模式
+            IF direction &lt;&gt; now_direction THEN // 先减速至0
+            ELSE
+                IF run_mode = 1(* RM_ACC_EQU_DEC *) OR run_mode = 2(* RM_DEC_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Active := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Active := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 4 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_4
+VAR_INPUT
+    Axis_num : USINT;
+    Execute : BOOL;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Axis_numOut : USINT;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    s_all : REAL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF NOT Execute AND stage &lt;&gt; 3(* FBS_InBuffer *) AND stage &lt;&gt; 4(* FBS_Moving *) THEN
+    Busy := FALSE;
+END_IF;
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+        Busy := FALSE;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 5 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_5
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    direction : INT;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    stage : USINT;
+    t_all : REAL;
+    t_now : UDINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+        Busy := FALSE;
+    ELSE
+        Busy := TRUE;
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                        Busy := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) OR run_mode = 4(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Busy := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        ELSE                     // S 型模式
+            IF direction &lt;&gt; now_direction THEN // 先减速至0
+            ELSE
+                IF run_mode = 1(* RM_ACC_EQU_DEC *) OR run_mode = 2(* RM_DEC_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Busy := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        Busy := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 6 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_6
+VAR_INPUT
+    Axis_num : USINT;
+    Execute : BOOL;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Axis_numOut : USINT;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    Axis_state : USINT;
+    s_all : REAL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF NOT Execute AND stage &lt;&gt; 3(* FBS_InBuffer *) AND stage &lt;&gt; 4(* FBS_Moving *) THEN
+    CommandAborted := FALSE;
+END_IF;
+IF (Axis_state = 0(* AS_Disabled *) OR Axis_state = 1(* AS_Errorstop *)) AND stage = 4(* FBS_Moving *) THEN
+    CommandAborted := TRUE;
+END_IF;
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+        CommandAborted := FALSE;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 7 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_7
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    direction : INT;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    stage : USINT;
+    t_all : REAL;
+    t_now : UDINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+        CommandAborted := TRUE;
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                        CommandAborted := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) OR run_mode = 4(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        CommandAborted := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        ELSE                     // S 型模式
+            IF direction &lt;&gt; now_direction THEN // 先减速至0
+            ELSE
+                IF run_mode = 1(* RM_ACC_EQU_DEC *) OR run_mode = 2(* RM_DEC_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        CommandAborted := FALSE;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                        CommandAborted := FALSE;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 8 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_8
+VAR_INPUT
+    Acceleration : REAL;
+    Axis_num : USINT;
+    Deceleration : REAL;
+    Execute : BOOL;
+    Jerk : REAL;
+    Position : REAL;
+    Velocity : REAL;
+END_VAR
+VAR_OUTPUT
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    Axis_maxacc : REAL;
+    Axis_maxdec : REAL;
+    Axis_maxjerk : REAL;
+    Axis_maxvel : REAL;
+    Axis_state : USINT;
+    execute_before : BOOL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 0(* FBS_WaitExec *) AND Execute AND NOT execute_before THEN
+    IF Axis_num &gt;= 50(* AXIS_MAXNUM *) OR Velocity &lt;= 0.004 (* MINV *) OR Velocity &gt; Axis_maxvel OR
+       Acceleration &lt;= 0.004 (* MINV *) OR Acceleration &gt; Axis_maxacc OR
+       Deceleration &lt;= 0.004 (* MINV *) OR Deceleration &gt; Axis_maxdec OR
+       Jerk &lt; 0 OR Jerk &gt; Axis_maxjerk 
+    THEN
+        Error := TRUE;
+    ELSIF Axis_state = 0(* MC_Disabled *) OR Axis_state = 1(* MC_Errorstop *) OR Axis_state = 4(* MC_Stopping *) THEN
+        Error := TRUE;
+    ELSE
+        Error := FALSE;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 9 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_9
+VAR_INPUT
+    Acceleration : REAL;
+    Axis_num : USINT;
+    Deceleration : REAL;
+    Execute : BOOL;
+    Jerk : REAL;
+    Position : REAL;
+    Velocity : REAL;
+END_VAR
+VAR_OUTPUT
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    Axis_maxacc : REAL;
+    Axis_maxdec : REAL;
+    Axis_maxjerk : REAL;
+    Axis_maxvel : REAL;
+    Axis_state : USINT;
+    execute_before : BOOL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 0(* FBS_WaitExec *) AND Execute AND NOT execute_before THEN
+    IF Axis_num &gt;= 50(* AXIS_MAXNUM *) OR Velocity &lt;= 0.004 (* MINV *) OR Velocity &gt; Axis_maxvel OR
+       Acceleration &lt;= 0.004 (* MINV *) OR Acceleration &gt; Axis_maxacc OR
+       Deceleration &lt;= 0.004 (* MINV *) OR Deceleration &gt; Axis_maxdec OR
+       Jerk &lt; 0 OR Jerk &gt; Axis_maxjerk 
+    THEN
+        ErrorID := 16#02(* ER_ParameterError *);
+    ELSIF Axis_state = 0(* MC_Disabled *) OR Axis_state = 1(* MC_Errorstop *) OR Axis_state = 4(* MC_Stopping *) THEN
+        ErrorID := 16#01(* ER_StateError *);
+    ELSE
+        ErrorID := 16#00(* ER_NoError *);
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 10 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_10
+VAR_INPUT
+    Acceleration : REAL;
+    Axis_num : USINT;
+    BufferMode : USINT;
+    Deceleration : REAL;
+    Execute : BOOL;
+    Jerk : REAL;
+    Position : REAL;
+    Velocity : REAL;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Axis_numOut : USINT;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+    Error : BOOL;
+    ErrorID : UINT;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_busy : USINT;
+    Axis_maxacc : REAL;
+    Axis_maxdec : REAL;
+    Axis_maxjerk : REAL;
+    Axis_maxvel : REAL;
+    Axis_run_next : USINT;
+    Axis_state : USINT;
+    execute_before : BOOL;
+    s_all : REAL;
+    stage : USINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF NOT Execute AND stage &lt;&gt; 3(* FBS_InBuffer *) AND stage &lt;&gt; 4(* FBS_Moving *) THEN
+    stage := 0(* FBS_WaitExec *);
+END_IF;
+IF (Axis_state = 0(* AS_Disabled *) OR Axis_state = 1(* AS_Errorstop *)) AND stage = 4(* FBS_Moving *) THEN
+    stage := 0(* FBS_WaitExec *);
+END_IF;
+IF stage = 0(* FBS_WaitExec *) AND Execute AND NOT execute_before THEN
+    IF Axis_num &gt;= 50(* AXIS_MAXNUM *) OR Velocity &lt;= 0.004 (* MINV *) OR Velocity &gt; Axis_maxvel OR
+       Acceleration &lt;= 0.004 (* MINV *) OR Acceleration &gt; Axis_maxacc OR
+       Deceleration &lt;= 0.004 (* MINV *) OR Deceleration &gt; Axis_maxdec OR
+       Jerk &lt; 0 OR Jerk &gt; Axis_maxjerk 
+    THEN
+    ELSE
+        stage := 1(* FBS_WaitBuffer *);
+    END_IF;
+END_IF;
+IF stage = 1(* FBS_WaitBuffer *)  THEN
+    IF BufferMode = 0(* BM_Aborting *) THEN
+        stage := 3(* FBS_CalcRoute *);
+    ELSE
+        IF Axis_buffer_busy = 0 THEN
+            IF (BufferMode = 1 AND Axis_run_next &lt;&gt; 1) OR BufferMode &lt;&gt; 1 THEN
+                stage := 2(* FBS_InBuffer *);
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+IF stage = 2(* FBS_InBuffer *) THEN
+    IF Axis_busy = 0 THEN
+        stage := 3(* FBS_CalcRoute *);
+    END_IF;
+END_IF;
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+        stage := 0(* FBS_WaitExec *);
+    ELSE
+        stage := 4(* FBS_Moving *);
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 11 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_11
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    jerk_mode : BOOL;
+    run_mode : USINT;
+    s_all : REAL;
+    stage : USINT;
+    vel : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 3(* FBS_CalcRoute *) THEN
+    IF s_all &lt;= 0.001(* MINP *) THEN
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF vs &lt; vel - 0.004(* MINV *) THEN    // 运动初速度 &lt; 运动目标速度
+                run_mode := 1(* RM_ACC_EQU_DEC *);
+            END_IF;
+            IF vs &gt;= vel - 0.004(* MINV *) THEN   // 运动初速度 &gt;= 运动目标速度
+                run_mode := 2(* RM_DEC_EQU_DEC *);
+            END_IF;
+        ELSE                     // S 型模式
+            IF vs &lt; vel THEN    // 初速度 &lt; 目标速度
+                run_mode := 1(* RM_ACC_EQU_DEC *);
+            END_IF;
+            IF vs &gt;= vel THEN       // 初速度 &gt;= 目标速度
+                run_mode := 2(*RM_DEC_EQU_DEC*);
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 12 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_12
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_blending_v : REAL;
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    blend_equal_vel : REAL;
+    jerk_mode : BOOL;
+    run_mode : USINT;
+    run_numberF : USINT;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                        IF Axis_blending_v &gt; blend_equal_vel - 0.004(* MINV *) THEN  // 混承速度 &gt; 当前速度
+                            run_mode := 4(* RM_BLENDING_EQU_ACC *);
+                        ELSE                                                       // 混承速度 &lt;= 当前速度
+                            run_mode := 3(* RM_BLENDING_EQU_DEC *);
+                        END_IF;
+                    ELSE                 // 梯形混成
+                        IF Axis_blending_v &gt; blend_equal_vel - 0.004(* MINV *) THEN  // 混承速度 &gt; 当前速度
+                            run_mode := 4(* RM_BLENDING_EQU_ACC *);
+                        ELSE                                                       // 混承速度 &lt;= 当前速度
+                            run_mode := 3(* RM_BLENDING_EQU_DEC *);
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 13 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_13
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    blend_equal_vel : REAL;
+    blend_start_t : REAL;
+    blend_start_v : REAL;
+    direction : INT;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    now_stage_vs : REAL;
+    rt1 : REAL;
+    rt2 : REAL;
+    rt3 : REAL;
+    run_mode : USINT;
+    run_numberF : USINT;
+    rvs : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t4 : REAL;
+    t5 : REAL;
+    t6 : REAL;
+    t7 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+        ELSE                     // S 型模式
+            IF direction &lt;&gt; now_direction THEN // 先减速至0
+                IF t_now &gt;= rt1 + rt2 +rt3 THEN
+                ELSIF t_now &lt;= rt1 THEN
+                    now_stage_vs := rvs;
+                ELSIF t_now &lt; rt1 + rt2 + rt3 THEN
+                    now_stage_vs := rvs - jerk * rt1 * rt1 / 2 - jerk * rt1 * rt2;
+                END_IF;
+            ELSE
+                IF run_mode = 1(* RM_ACC_EQU_DEC *) OR run_mode = 2(* RM_DEC_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                    ELSIF t_now &lt;= t1 + t2 THEN
+                        IF run_mode = 1(* RM_ACC_EQU_DEC *) THEN
+                            now_stage_vs := vs + jerk * t1 * t1 / 2;
+                        END_IF;
+                    ELSIF t_now &lt;= t1 + t2 + t3 THEN
+                        IF run_mode = 1(* RM_ACC_EQU_DEC *) THEN
+                            now_stage_vs := vs + jerk * t1 * t1 / 2 + jerk * t1 * t2;
+                        END_IF;
+                    ELSIF t_now &lt;= t1 + t2 + t3 + t4 THEN
+                        now_stage_vs := vmax;
+                    ELSIF t_now &lt;= t1 + t2 + t3 + t4 + t5 + t6 THEN
+                        now_stage_vs := vmax - jerk * t5 * t5 / 2;
+                    END_IF;
+                ELSIF run_mode = 3(* RM_BLENDING_EQU_DEC *) THEN
+                    IF t_now &gt;= t_all THEN
+                    ELSIF t_now &lt;= blend_start_t + t5 THEN
+                        now_stage_vs := blend_start_v;
+                    ELSIF t_now &lt;= blend_start_t + t5 + t6 + t7 THEN
+                        now_stage_vs := blend_equal_vel; 
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 14 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_14
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    Axis_taget_postion : REAL;
+    acc : REAL;
+    dec : REAL;
+    direction : INT;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    s1 : REAL;
+    stage : USINT;
+    start_postion : REAL;
+    t1 : REAL;
+    t2 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                    ELSIF t_now &lt; t1 + t2 THEN
+                        Axis_taget_postion := start_postion + now_direction * ( s1 + 
+                            Motion_Delta_S(vs := vmax,acc := 0,dec := 0,jerk := 0,d_t := t_now - t1));
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 15 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_15
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_run_number : USINT;
+    Axis_taget_postion : REAL;
+    acc : REAL;
+    dec : REAL;
+    direction : INT;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    now_direction : INT;
+    run_mode : USINT;
+    run_numberF : USINT;
+    s1 : REAL;
+    s2 : REAL;
+    stage : USINT;
+    start_postion : REAL;
+    t1 : REAL;
+    t2 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF NOT jerk_mode THEN    // 梯形模式
+            IF direction &lt;&gt; now_direction THEN
+            ELSE
+                IF run_mode = 1(*RM_ACC_EQU_DEC*) OR run_mode = 2(*RM_DEC_EQU_DEC*) THEN
+                    IF t_now &gt;= t_all THEN
+                    ELSIF t_now &lt; t_all THEN
+                        Axis_taget_postion := start_postion + now_direction * ( s1 + s2 +
+                            Motion_Delta_S(vs := vmax,acc := 0,dec := dec,jerk := 0,d_t := t_now - t1 - t2));
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 16 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_16
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    acc : REAL;
+    dec : REAL;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    run_numberF : USINT;
+    s1 : REAL;
+    s2 : REAL;
+    s3 : REAL;
+    s4 : REAL;
+    s_all : REAL;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t4 : REAL;
+    t5 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                        IF t_now &lt;= t1 + t2 + t3 + t4 THEN
+                        ELSIF t_now &lt;= t1 + t2 + t3 + t4 + t5 THEN
+                            s_blend := s_all - s1 - s2 - s3 - s4 - 
+                                Motion_Delta_S(vs := vmax,acc := 0,dec := 0,jerk := ( -1 * jerk),d_t := t_now - t1 - t2 - t3 - t4);
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 17 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_17
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    acc : REAL;
+    dec : REAL;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    run_numberF : USINT;
+    s1 : REAL;
+    s_all : REAL;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                    ELSE                 // 梯形混成
+                        IF t_now &lt; t1 + t2 THEN
+                            s_blend := s_all - s1 - Motion_Delta_S(vs := vmax,acc := 0,dec := 0,jerk := 0,d_t := UDINT_TO_REAL(t_now) - t1);
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 18 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_18
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    blend_equal_vel : REAL;
+    jerk_mode : BOOL;
+    run_numberF : USINT;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                    ELSE                 // 梯形混成
+                        IF t_now &lt; t1 + t2 THEN
+                            blend_equal_vel := vmax;
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 19 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_19
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    acc : REAL;
+    dec : REAL;
+    jerk : REAL;
+    jerk_mode : BOOL;
+    run_numberF : USINT;
+    s1 : REAL;
+    s2 : REAL;
+    s_all : REAL;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+    vs : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                    ELSE                 // 梯形混成
+                        IF t_now &lt; t1 + t2 THEN
+                        ELSE
+                            s_blend := s_all - s1 - s2 - Motion_Delta_S(vs := vmax,acc := 0,dec := dec,jerk := 0,d_t := UDINT_TO_REAL(t_now) - t1 - t2);
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
+
+===== BLOCK 20 =====
+
+PROGRAM MC_MoveAbsolute_Init_Acc_BLOCK_20
+VAR_INPUT
+    Axis_num : USINT;
+END_VAR
+VAR_OUTPUT
+    Active : BOOL;
+    Busy : BOOL;
+    CommandAborted : BOOL;
+    Done : BOOL;
+END_VAR
+VAR
+    Axis_buffer_busy : USINT;
+    Axis_buffered_without_blending : USINT;
+    Axis_run_number : USINT;
+    blend_equal_vel : REAL;
+    dec : REAL;
+    jerk_mode : BOOL;
+    run_numberF : USINT;
+    s_blend : REAL;
+    stage : USINT;
+    t1 : REAL;
+    t2 : REAL;
+    t3 : REAL;
+    t_all : REAL;
+    t_now : UDINT;
+    vmax : REAL;
+END_VAR
+
+(* ===== Functional body from original code ===== *)
+IF stage = 4(* FBS_Moving *) THEN
+    IF Axis_run_number &lt;&gt; run_numberF THEN    // 功能块被打断
+    ELSE
+        IF Axis_buffer_busy = 1 AND s_blend = 0 THEN    // 缓存中有内容需要进行混成计算
+            IF Axis_buffered_without_blending = 0 THEN
+                IF (NOT jerk_mode AND t_now &gt; t1 AND t_now &lt; t_all) OR
+                   (jerk_mode AND t_now &gt; t1 + t2 + t3 AND t_now &lt; t_all) THEN
+                    IF jerk_mode THEN    // S型混成
+                    ELSE                 // 梯形混成
+                        IF t_now &lt; t1 + t2 THEN
+                        ELSE
+                            blend_equal_vel := vmax - dec * (UDINT_TO_REAL(t_now) - t1 - t2);
+                        END_IF;
+                    END_IF;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+END_IF;
+END_PROGRAM
