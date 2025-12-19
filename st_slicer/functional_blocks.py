@@ -154,17 +154,6 @@ def _nodes_to_sorted_ast_stmts_safe(
     if not stmt_set:
         return []
 
-    # We want to reuse close_with_control_structures logic inside nodes_to_sorted_ast_stmts
-    # which depends on parent_map and uses actual stmt objects.
-    # The simplest: build a temporary ir2ast list aligned only for these nodes, but that
-    # function expects node_ids indices. Instead, we just call its closure helper indirectly:
-    #   - create a fake ir2ast list where each nid maps to the stmt, at least for in-range ones,
-    #   - for out-of-range nids we cannot index; so we pass empty and rely on parent closure from parent_map
-    # Here: we bypass the original function and directly apply closure like it does by calling it with
-    # an empty set is not possible. So we emulate: take stmt_set, then add control-structure parents.
-    #
-    # parent_map is already built from ir2ast_stmt; for fallback stmts that are not in parent_map,
-    # closure won't add parents (still better than dropping them).
     closed: Set[Any] = set(stmt_set)
     work = list(stmt_set)
     while work:
@@ -182,95 +171,6 @@ def _nodes_to_sorted_ast_stmts_safe(
         closed,
         key=lambda s: (getattr(getattr(s, "loc", None), "line", 0), getattr(getattr(s, "loc", None), "column", 0)),
     )
-
-def _crit_key(c) -> tuple:
-    extra = getattr(c, "extra", None) or {}
-    access = extra.get("access")
-    access_str = access.pretty() if (access is not None and hasattr(access, "pretty")) else None
-    return (getattr(c, "node_id", None), getattr(c, "kind", None), getattr(c, "variable", None), access_str)
-
-
-def _dedup_criteria_list(crits):
-    seen = set()
-    out = []
-    for c in crits or []:
-        k = _crit_key(c)
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(c)
-    return out
-
-
-def _jaccard_lines(a: Set[int], b: Set[int]) -> float:
-    if not a and not b:
-        return 1.0
-    inter = len(a & b)
-    if inter == 0:
-        return 0.0
-    union = len(a | b)
-    return inter / union if union else 0.0
-
-
-def merge_blocks_to_budget(blocks: List[FunctionalBlock], code_lines: List[str], *, max_blocks: int = 15) -> List[FunctionalBlock]:
-    if len(blocks) <= max_blocks:
-        return blocks
-
-    blocks = list(blocks)
-
-    while len(blocks) > max_blocks:
-        best_i, best_j, best_sim = -1, -1, -1.0
-        line_sets = [set(b.line_numbers or []) for b in blocks]
-
-        for i in range(len(blocks)):
-            for j in range(i + 1, len(blocks)):
-                sim = _jaccard_lines(line_sets[i], line_sets[j])
-                if sim > best_sim:
-                    best_sim = sim
-                    best_i, best_j = i, j
-
-        # 相似度太低就停止，避免无意义硬合
-        if best_sim < 0.15 or best_i < 0 or best_j < 0:
-            break
-
-        bi, bj = blocks[best_i], blocks[best_j]
-
-        merged_criteria = _dedup_criteria_list((bi.criteria or []) + (bj.criteria or []))
-
-        # stmts 去重也不要 set(Stmt)，部分节点对象可能不可 hash；用 (line,col,type) key 去重
-        stmt_seen = set()
-        merged_stmts = []
-        for s in (bi.stmts or []) + (bj.stmts or []):
-            k = (getattr(getattr(s, "loc", None), "line", 0), getattr(getattr(s, "loc", None), "column", 0), type(s).__name__)
-            if k in stmt_seen:
-                continue
-            stmt_seen.add(k)
-            merged_stmts.append(s)
-        merged_stmts.sort(key=lambda s: (getattr(getattr(s, "loc", None), "line", 0), getattr(getattr(s, "loc", None), "column", 0)))
-
-        merged = FunctionalBlock(
-            criteria=merged_criteria,
-            node_ids=set(bi.node_ids) | set(bj.node_ids),
-            stmts=merged_stmts,
-            line_numbers=sorted(set(bi.line_numbers or []) | set(bj.line_numbers or [])),
-        )
-
-        # 合并后做结构补全，保证可读性
-        fixed = patch_if_structure(merged.line_numbers, code_lines, ensure_end_if=True)
-        fixed = patch_case_structure(fixed, code_lines, ensure_end_case=True, include_branch_headers=True)
-        fixed = patch_loop_structures(fixed, code_lines, include_header_span=True, include_until_span=True)
-        merged.line_numbers = sorted(fixed)
-
-        # 替换两个块为 merged
-        keep = []
-        for k, b in enumerate(blocks):
-            if k not in (best_i, best_j):
-                keep.append(b)
-        keep.append(merged)
-        blocks = keep
-
-    return dedup_blocks_by_code(blocks, code_lines)
-
 
 
 def extract_functional_blocks(
@@ -316,6 +216,61 @@ def extract_functional_blocks(
         diag.slice_node_sizes = []
         diag.cluster_node_sizes = []
         diag.extra = getattr(diag, "extra", {}) or {}
+
+    # ---------------------------------------------------------
+    # control_region_set criteria dedup by REGION Jaccard (SHORT)
+    # ---------------------------------------------------------
+    ctrl_pred = getattr(prog_pdg, "ctrl_pred", None)
+    if isinstance(ctrl_pred, dict):
+        ctrl_succ = getattr(prog_pdg, "ctrl_succ", None)
+        if not isinstance(ctrl_succ, dict):
+            ctrl_succ = _invert_pred_map(ctrl_pred)
+
+        # 调这个阈值：0.90~0.95 通常比较稳；越小删得越狠
+        REGION_JACCARD_TH = 0.70
+
+        def _jaccard_nodes(a: Set[int], b: Set[int]) -> float:
+            if not a and not b:
+                return 1.0
+            inter = len(a & b)
+            if inter == 0:
+                return 0.0
+            uni = len(a | b)
+            return inter / uni if uni else 0.0
+
+        before = sum(1 for c in criteria if (c.kind or "") == "control_region_set")
+
+        kept: List[SlicingCriterion] = []
+        kept_regions: List[Set[int]] = []
+
+        for c in criteria:
+            if (c.kind or "") != "control_region_set":
+                kept.append(c)
+                continue
+
+            # 1) seed -> root（仍然用你现有的 root 定义）
+            root = _pick_control_root(c.node_id, ctrl_pred, ctrl_succ)
+
+            # 2) root -> region（用你现有的 region 定义）
+            region = compute_region_nodes(root, prog_pdg, ir2ast_stmt=ir2ast_stmt)
+
+            # 3) 与已保留 region 做 Jaccard 去重
+            redundant = False
+            for r0 in kept_regions:
+                if _jaccard_nodes(region, r0) >= REGION_JACCARD_TH:
+                    redundant = True
+                    break
+            if redundant:
+                continue
+
+            # 4) 保留：node_id 归一到 root（稳定）
+            kept.append(SlicingCriterion(node_id=root, kind=c.kind, extra=c.extra))
+            kept_regions.append(region)
+
+        criteria = kept
+
+        after = sum(1 for c in criteria if (c.kind or "") == "control_region_set")
+        print(f"[region-dedup] control_region_set: {before} -> {after} (th={REGION_JACCARD_TH})")
 
     # =========================================================
     # 1) 每个准则做后向切片（或 region）
@@ -503,10 +458,8 @@ def extract_functional_blocks(
         for b in blocks:
             diag.cov_after_meaningful |= set(b.line_numbers)
 
-    # =========================================================
-    # 8) 去重
-    # =========================================================
-    blocks = dedup_blocks_by_code(blocks, code_lines)
+    # 8) 去重 + overlap 去冗余（全量生成后收敛）
+    blocks = dedup_blocks_by_code(blocks, code_lines, overlap_jaccard=0.85, prefer_larger=True)
 
     if diag is not None:
         diag.n_blocks_dedup = len(blocks)
@@ -523,8 +476,5 @@ def extract_functional_blocks(
                 print(f"[extra] region_sizes: n={len(rs2)} min={rs2[0]} p50={rs2[len(rs2)//2]} max={rs2[-1]}")
             print(f"[extra] cov_pdg_loc_lines={diag.extra.get('cov_pdg_loc_lines')}, "
                   f"lost_in_mapping_pdg_minus_safe={diag.extra.get('lost_in_mapping_pdg_minus_safe')}")
-
-    # # 9) 块预算（强制把块数量压到 ~十几个）
-    # blocks = merge_blocks_to_budget(blocks, code_lines, max_blocks=15)
 
     return blocks

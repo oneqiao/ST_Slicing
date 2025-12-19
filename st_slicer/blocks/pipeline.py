@@ -686,10 +686,25 @@ def remove_empty_cases_in_blocks(blocks: List[FunctionalBlock], code_lines: List
 
     return blocks
 
-def dedup_blocks_by_code(blocks: List[FunctionalBlock], code_lines: List[str]) -> List[FunctionalBlock]:
+def dedup_blocks_by_code(
+    blocks: List[FunctionalBlock],
+    code_lines: List[str],
+    *,
+    overlap_jaccard: float = 0.0,   # 0.0 表示不启用 overlap 过滤
+    prefer_larger: bool = True,     # overlap 冲突时优先保留更大的块
+) -> List[FunctionalBlock]:
+    """
+    集中处理块去重/去冗余：
+    1) 严格去重：按“归一化文本”去重（你原来的逻辑）
+    2) 可选 overlap 过滤：按 line_numbers 的 Jaccard 相似度去冗余（全量生成后收敛）
+    """
+    n = len(code_lines)
+    if not blocks:
+        return []
+
+    # ---- 1) 严格去重（沿用你原本的 clean_st_line 方案）----
     seen: Set[str] = set()
     uniq: List[FunctionalBlock] = []
-    n = len(code_lines)
 
     for b in blocks:
         if not b.line_numbers:
@@ -697,14 +712,47 @@ def dedup_blocks_by_code(blocks: List[FunctionalBlock], code_lines: List[str]) -
         body = []
         for ln in sorted(set(b.line_numbers)):
             if 1 <= ln <= n:
-                body.append(clean_st_line(code_lines[ln - 1]).strip())
-        key = "\n".join(x for x in body if x).strip()
+                t = clean_st_line(code_lines[ln - 1]).strip()
+                if t:
+                    body.append(t)
+        key = "\n".join(body).strip()
         if not key or key in seen:
             continue
         seen.add(key)
         uniq.append(b)
 
+    # ---- 2) overlap 去冗余（全量生成后过滤重复度过高的块）----
+    if overlap_jaccard and overlap_jaccard > 0.0 and len(uniq) > 1:
+        def jaccard(a: Set[int], b: Set[int]) -> float:
+            if not a and not b:
+                return 1.0
+            inter = len(a & b)
+            if inter == 0:
+                return 0.0
+            union = len(a | b)
+            return inter / union if union else 0.0
+
+        # 排序：默认优先保留更大的块（覆盖更完整）
+        uniq.sort(key=lambda b: len(b.line_numbers or []), reverse=prefer_larger)
+
+        kept: List[FunctionalBlock] = []
+        kept_sets: List[Set[int]] = []
+
+        for b in uniq:
+            s = set(b.line_numbers or [])
+            redundant = False
+            for ks in kept_sets:
+                if jaccard(s, ks) >= overlap_jaccard:
+                    redundant = True
+                    break
+            if not redundant:
+                kept.append(b)
+                kept_sets.append(s)
+
+        uniq = kept
+
     return uniq
+
 
 def postprocess_blocks(
     blocks: List[FunctionalBlock],

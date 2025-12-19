@@ -6,7 +6,7 @@ from collections import Counter
 import argparse
 import json
 import copy
-
+import re
 from st_slicer.parser.parse_st import parse_st_code
 from st_slicer.ast.builder import ASTBuilder
 from st_slicer.ir.ir_builder import IRBuilder
@@ -27,6 +27,18 @@ from st_slicer.blocks.pipeline import (
 )
 from st_slicer.blocks.core import SlicingCriterion
 
+from html import unescape as html_unescape
+_ST_EXECUTABLE_PATTERNS = [
+    r":=",                 # assignment
+    r"\bIF\b", r"\bELSIF\b", r"\bWHILE\b", r"\bFOR\b",
+    r"\bCASE\b", r"\bRETURN\b",
+    r"\(",                 # function / FB call
+]
+
+_ST_STRUCTURAL_ONLY = {
+    "ELSE", "END_IF", "END_PROGRAM", "END_CASE", "END_FOR", "END_WHILE",
+    "VAR", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT", "END_VAR",
+}
 
 # -------------------------
 # Coverage utils
@@ -44,9 +56,40 @@ def _is_code_line(code_lines: List[str], i: int) -> bool:
     if stripped.startswith("//"):
         return False
     return True
+def is_st_executable_line(code_lines: list[str], i: int) -> bool:
+    if not (1 <= i <= len(code_lines)):
+        return False
 
+    line = code_lines[i - 1]
+    stripped = line.strip()
 
-def report_coverage(tag: str, blocks_or_lines, code_lines: List[str]) -> Tuple[int, int, float]:
+    if not stripped:
+        return False
+
+    # full-line comments
+    if stripped.startswith("//"):
+        return False
+    if stripped.startswith("(*") and stripped.endswith("*)"):
+        return False
+
+    upper = stripped.upper().rstrip(";")
+
+    # pure structural keywords
+    if upper in _ST_STRUCTURAL_ONLY:
+        return False
+
+    # variable declaration line
+    if ":" in stripped and ":=" not in stripped and stripped.endswith(";"):
+        return False
+
+    # executable pattern
+    return any(re.search(p, stripped) for p in _ST_EXECUTABLE_PATTERNS)
+
+def report_precise_coverage(
+    tag: str,
+    blocks_or_lines,
+    code_lines: List[str],
+) -> Tuple[int, int, float]:
     used: Set[int] = set()
 
     if isinstance(blocks_or_lines, list) and blocks_or_lines and hasattr(blocks_or_lines[0], "line_numbers"):
@@ -55,11 +98,22 @@ def report_coverage(tag: str, blocks_or_lines, code_lines: List[str]) -> Tuple[i
     else:
         used.update(blocks_or_lines or [])
 
-    total_code_lines = sum(1 for i in range(1, len(code_lines) + 1) if _is_code_line(code_lines, i))
-    covered_code_lines = sum(1 for i in used if 1 <= i <= len(code_lines) and _is_code_line(code_lines, i))
-    ratio = covered_code_lines / total_code_lines if total_code_lines else 0.0
-    print(f"[{tag}] used {covered_code_lines} / {total_code_lines} code lines = {ratio:.1%}")
-    return covered_code_lines, total_code_lines, ratio
+    executable_lines = [
+        i for i in range(1, len(code_lines) + 1)
+        if is_st_executable_line(code_lines, i)
+    ]
+
+    total_exec = len(executable_lines)
+    covered_exec = sum(1 for i in executable_lines if i in used)
+
+    ratio = covered_exec / total_exec if total_exec else 0.0
+
+    print(
+        f"[{tag}] executable lines covered "
+        f"{covered_exec} / {total_exec} = {ratio:.1%}"
+    )
+
+    return covered_exec, total_exec, ratio
 
 
 # -------------------------
@@ -188,10 +242,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--st", type=str, default="mc_moveabsolute.st")
     ap.add_argument("--max-fill", type=int, default=0)
-    ap.add_argument("--min-lines", type=int, default=8)
+    ap.add_argument("--min-lines", type=int, default=40)
     ap.add_argument("--max-lines", type=int, default=150)
     ap.add_argument("--min-lines-stage", type=int, default=8)
-    ap.add_argument("--overlap", type=float, default=0.8)
+    ap.add_argument("--overlap", type=float, default=0.6)
     ap.add_argument("--policy", type=str, default="policy.json")
     args = ap.parse_args()
 
@@ -205,6 +259,17 @@ def main():
 
     code_path = Path(__file__).resolve().parent / args.st
     code = code_path.read_text(encoding="utf-8")
+
+    # -------------------------------------------------
+    # HTML entity unescape (critical before parsing)
+    # -------------------------------------------------
+    # If the ST file contains escaped entities like &lt; &gt; &amp;,
+    # convert them back to real characters so the parser/AST/PDG see valid ST tokens.
+    code = html_unescape(code)
+
+    # Optional: normalize Windows line endings (safe)
+    code = code.replace("\r\n", "\n").replace("\r", "\n")
+
     code_lines = code.splitlines()
 
     policy_path = (Path(__file__).resolve().parent / args.policy) if args.policy else None
@@ -292,7 +357,7 @@ def main():
             stmts = nodes_to_sorted_ast_stmts(nodes, irb.ir2ast_stmt, parent_map)
             raw_used_lines |= set(stmts_to_line_numbers(stmts, code_lines))
 
-        report_coverage("RAW Coverage", raw_used_lines, code_lines)
+        report_precise_coverage("RAW Exec Coverage", raw_used_lines, code_lines)
 
         # functional blocks
         blocks = extract_functional_blocks(
@@ -306,7 +371,7 @@ def main():
             min_lines_stage=args.min_lines_stage,
         )
 
-        report_coverage("BLOCK Coverage", blocks, code_lines)
+        report_precise_coverage("BLOCK Exec Coverage", blocks, code_lines)
         print(f"\nTotal functional blocks : {len(blocks)}")
 
         # write blocks
