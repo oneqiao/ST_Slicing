@@ -173,6 +173,51 @@ def remove_orphan_control_lines(lines: List[str]) -> List[str]:
     # 注意：这里不主动补 END_IF。补全会改变语义；我们只负责“清理孤儿”
     return out
 
+def flatten_synthetic_if_true(lines: List[str]) -> List[str]:
+    """
+    展开切片器注入的 'IF TRUE THEN' 包裹层：
+      - 遇到 IF TRUE THEN：入栈标记为 synthetic，不输出该行
+      - 遇到 END_IF：若匹配的是 synthetic，则不输出该 END_IF
+      - 遇到 ELSE/ELSIF：若当前 depth==0（孤儿），丢弃
+      - 遇到 END_IF：若当前 depth==0（孤儿），丢弃
+    目的：消除大量 IF TRUE 包裹导致的缺闭合/多闭合连锁错误
+    """
+    out: List[str] = []
+    stack: List[bool] = []  # True=synthetic IF TRUE, False=normal IF
+
+    for ln in lines:
+        if _IF_RE.match(ln):
+            # 判断是否为合成 IF TRUE THEN（允许缩进）
+            if ln.strip().upper().startswith("IF TRUE THEN"):
+                stack.append(True)
+                continue  # 不输出 synthetic opener
+            else:
+                stack.append(False)
+                out.append(ln)
+                continue
+
+        if _ELSIF_RE.match(ln) or _ELSE_RE.match(ln):
+            if not stack:
+                continue  # 孤儿 ELSE/ELSIF
+            out.append(ln)
+            continue
+
+        if _ENDIF_RE.match(ln):
+            if not stack:
+                continue  # 孤儿 END_IF
+            is_syn = stack.pop()
+            if is_syn:
+                continue  # 不输出 synthetic closer
+            out.append(ln)
+            continue
+
+        out.append(ln)
+
+    # 注意：这里不自动补 END_IF（避免改变真实语义）
+    # 但 synthetic 的 IF TRUE 如果没闭合，会在 stack 中残留，
+    # 它本来就不应存在，直接忽略即可（相当于“把包裹层彻底移除”）。
+    return out
+
 
 def simplify_st_if_skeleton(lines: List[str]) -> List[str]:
     """
@@ -300,16 +345,18 @@ def preprocess_slice_block_text(block_text: str, drop_var: bool = True) -> str:
     if drop_var:
         lines = strip_var_sections(lines)
 
-    # 0) 先去孤儿控制行：孤儿 ELSE/ELSIF/END_IF
+    # 0) 先展开 IF TRUE THEN 包裹层（这是你当前结构崩坏的根因）
+    lines = flatten_synthetic_if_true(lines)
+
+    # 1) 再清理孤儿控制行（保险）
     lines = remove_orphan_control_lines(lines)
 
-    # 1) 强 guard：只有 IF 结构可解析（扫描不下溢且最终 depth==0）才做剪裁
+    # 2) 强 guard：结构闭合才做 IF skeleton 剪裁
     ok, _min_depth, final_depth = _if_depth_scan(lines)
     if ok and final_depth == 0:
         lines = simplify_st_if_skeleton(lines)
-    # 否则：保守策略，不剪裁 IF（避免制造更多 END_IF 错配）
 
-    # 2) 清理多余空行（保留少量结构性空行）
+    # 3) 合并多余空行
     cleaned: List[str] = []
     last_blank = False
     for ln in lines:
@@ -321,6 +368,7 @@ def preprocess_slice_block_text(block_text: str, drop_var: bool = True) -> str:
         last_blank = blank
 
     return "\n".join(cleaned).strip() + "\n"
+
 
 
 
