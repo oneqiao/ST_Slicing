@@ -1,16 +1,14 @@
 PROGRAM P
 VAR
-  a : INT; // counter
-  b : INT; (* output *)
+  OUT1 : UINT;
+  OUT2 : UINT;
+  IN1  : UINT;
+  N    : USINT;
+  statusword : INT;
 END_VAR
 
-//IL
-LD a
-ADD 1
-ST a
-
-IF a > 0 THEN { positive branch }
-  a := a - 1; // decrement
-END_IF;
-
+OUT1 := USHLW(IN1, N);                 (* 位置参数 function call *)
+(OUT1, OUT2) := MOVB_5(IN1, IN1, N);   (* 多输出 tuple *)
+FB_Test(EN := TRUE, IN1 := IN1);       (* CallStmt / function block style *)
+OUT1 := INT_TO_UINT(IN1 := statusword);(* 命名参数 function call *)
 END_PROGRAM

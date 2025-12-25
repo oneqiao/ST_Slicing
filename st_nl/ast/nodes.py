@@ -10,7 +10,6 @@ class SourceLocation:
     line: int
     column: int = 0
 
-
 # --------------------
 # Expressions
 # --------------------
@@ -37,6 +36,10 @@ class FieldAccess(Expr):
     field: str
     loc: SourceLocation
 
+@dataclass(eq=False)
+class TupleExpr(Expr):
+    items: List[Expr]
+    loc: SourceLocation
 
 @dataclass(eq=False)
 class Literal(Expr):
@@ -179,4 +182,5 @@ class NamedArg:
     name: str
     value: "Expr"
     loc: SourceLocation
+    direction: Optional[str] = None  # "in" for :=, "out" for =>
 

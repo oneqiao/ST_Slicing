@@ -1,14 +1,13 @@
+# st_slicer/ast/nodes.py
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Tuple
-
 
 @dataclass(eq=False)
 class SourceLocation:
     file: str
     line: int
     column: int = 0
-
 
 # ===== Expressions =====
 

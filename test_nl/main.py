@@ -3,6 +3,7 @@
 from pathlib import Path
 from antlr4 import CommonTokenStream, InputStream
 from antlr4.tree.Trees import Trees
+from typing import Iterable
 
 # 1) 按你的项目实际路径修改这两个 import
 #    - preprocess_st: 你写的预处理函数
@@ -18,6 +19,25 @@ from st_nl.ast.nodes import (
     Assignment, IfStmt, ForStmt, WhileStmt, RepeatStmt, CallStmt, CaseStmt,
     VarRef, ArrayAccess, FieldAccess, CallExpr, Literal, BinOp, UnaryOp,
 )
+from st_nl.ir.normalize import normalize_stmt
+from st_nl.ir.nodes import CallIR
+from st_nl.ast import nodes as N
+from st_nl.nl.ir import stmt_to_callir
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+def dump_callir(ir):
+    print(f"[CallIR] kind={ir.call_kind} callee={ir.callee} @ {ir.loc.file}:{ir.loc.line}")
+    if ir.inputs:
+        for inp in ir.inputs:
+            nm = inp.name if inp.name is not None else "<pos>"
+            print(f"   - in : {nm} dir={inp.direction} expr={type(inp.expr).__name__}:{getattr(inp.expr,'name',getattr(inp.expr,'value',''))}")
+    if ir.outputs:
+        for out in ir.outputs:
+            print(f"   - out: {type(out.target).__name__}:{getattr(out.target,'name',out.target)}")
+    else:
+        print("   - out: (none)")
 
 
 def dump_expr(e, indent=0):
@@ -42,14 +62,17 @@ def dump_expr(e, indent=0):
     elif t == "CallExpr":
         argc = len(e.pos_args) + len(e.named_args)
         print(pad + f"CallExpr(func={e.func}, argc={argc})")
-
         for a in e.pos_args:
             dump_expr(a, indent + 2)
-
         for na in e.named_args:
             print(pad + f"  NamedArg({na.name}=")
             dump_expr(na.value, indent + 4)
             print(pad + "  )")
+    elif t == "TupleExpr":
+        print(pad + "TupleExpr(")
+        for item in e.items:
+            dump_expr(item, indent + 2)
+        print(pad + ")")
     elif t == "UnaryOp":
         print(pad + f"UnaryOp(op={e.op})(")
         dump_expr(e.operand, indent + 2)
@@ -82,7 +105,6 @@ def dump_stmt(s, indent=0):
         pos = getattr(s, "pos_args", None)
         named = getattr(s, "named_args", None)
 
-        # 兼容旧字段：如果历史上你用过 s.args（List[Expr|NamedArg]）
         if pos is None and named is None and hasattr(s, "args"):
             pos = []
             named = []
@@ -97,17 +119,13 @@ def dump_stmt(s, indent=0):
 
         argc = len(pos) + len(named)
         print(pad + f"CallStmt(name={s.fb_name}, argc={argc})")
-
-        # 先打印位置参数
         for a in pos:
             dump_expr(a, indent + 2)
 
-        # 再打印命名参数
         for na in named:
             print(pad + f"  NamedArg({na.name}=")
             dump_expr(na.value, indent + 4)
             print(pad + "  )")
-
     elif t == "IfStmt":
         print(pad + "IfStmt(cond=")
         dump_expr(s.cond, indent + 2)
@@ -127,7 +145,6 @@ def dump_stmt(s, indent=0):
                 dump_stmt(x, indent + 2)
         print(pad + ")")
     elif t in ("ForStmt", "WhileStmt", "RepeatStmt", "CaseStmt"):
-        # 先简单打印节点类型，后面需要再细化
         print(pad + f"{t}(...)")
     else:
         print(pad + f"{t}")
@@ -166,57 +183,61 @@ def parse_st_code_debug(code: str):
     tree = parser.start()  # 入口规则 start
     return tree, parser
 
+def walk_stmts(stmts):
+    for s in stmts:
+        yield s
+        if isinstance(s, N.IfStmt):
+            yield from walk_stmts(s.then_body)
+            for _, b in (s.elif_branches or []):
+                yield from walk_stmts(b)
+            yield from walk_stmts(s.else_body or [])
+        elif isinstance(s, N.ForStmt):
+            yield from walk_stmts(s.body)
+        elif isinstance(s, N.WhileStmt):
+            yield from walk_stmts(s.body)
+        elif isinstance(s, N.RepeatStmt):
+            yield from walk_stmts(s.body)
+        elif isinstance(s, N.CaseStmt):
+            for e in s.entries:
+                yield from walk_stmts(e.body)
+            yield from walk_stmts(s.else_body or [])
+
+def test_normalize(pou):
+    calls = 0
+    for s in walk_stmts(pou.body):
+        ir = normalize_stmt(s)
+        if isinstance(ir, CallIR):
+            calls += 1
+            outs = ", ".join(o.name or "<expr>" for o in ir.outputs) or "<no outs>"
+            ins  = ", ".join((a.name + ":=" if a.name else "") + type(a.expr).__name__ for a in ir.inputs)
+            print(f"[CallIR] {outs} <- {ir.callee}({ins}) @ line {ir.loc.line}")
+    print(f"[SUMMARY] CallIR count = {calls}")
 
 def main():
-    # 你要验证的 .st 文件名（放在 test_nl/ 目录下）
-    filename = "sample4.st"
+    filename = "sample1.st"
 
-    # 1) 读取文件
+    # 1) 读取和预处理 ST 文件
     st_code = read_st_file(filename)
-
-    print("=" * 80)
-    print(f"[1] RAW ST FILE: {filename}")
-    print("=" * 80)
-    print(st_code)
-
-    # 2) 预处理
     processed = preprocess_st(st_code)
 
-    print("\n" + "=" * 80)
-    print("[2] PREPROCESSED ST CODE")
-    print("=" * 80)
-    print(processed)
-
-    # 3) IL 剥离检查（可选）
-    # 如果你 preprocess 里用 placeholder，就可以检测它；
-    # 如果你选择完全删除 IL，下面这段仍然可用（检查 IL 指令是否还存在）
-    il_keywords = ["LD ", "ADD ", "ST "]
-    if any(k in processed for k in il_keywords):
-        print("\n[WARN] Possible IL-like lines still present after preprocessing.")
-    else:
-        print("\n[OK] IL-like lines removed (or not present).")
-
-    # 4) 解析并打印 parse tree
-    print("\n" + "=" * 80)
-    print("[3] PARSE TREE (ANTLR)")
-    print("=" * 80)
-    try:
-        tree, parser = parse_st_code_debug(processed)
-        tree_str = Trees.toStringTree(tree, None, parser)
-        #print(tree_str)
-        #print("\n[OK] Parsed successfully with rule: start")
-    except Exception as e:
-        print("\n[FAIL] Parsing raised exception:")
-        print(repr(e))
-
-    # 5) AST 构建
+    # 2) 解析并构建 AST
+    tree, parser = parse_st_code_debug(processed)
     builder = ASTBuilder(filename=filename)
-    pous = builder.visit(tree)   # tree 是 parser.start() 的结果
-    print("\n" + "=" * 80)
-    print("[4] AST BUILDER OUTPUT")
-    print("=" * 80)
+    pous = builder.visit(tree)
+
     for pou in pous:
-        dump_pou(pou)
+        print(f"POU: {pou.name}")
+
+        call_count = 0
+        for stmt in walk_stmts(pou.body):
+            cir = stmt_to_callir(stmt)
+            if cir is None:
+                continue
+
+            call_count += 1
+            dump_callir(cir)   # 只在这里打印一次
+
+        print(f"[SUMMARY] total calls extracted: {call_count}")
 
 
 if __name__ == "__main__":
