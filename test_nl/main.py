@@ -24,8 +24,16 @@ from st_nl.ir.nodes import CallIR
 from st_nl.ast import nodes as N
 from st_nl.nl.ir import stmt_to_callir
 
+from st_nl.nl.generate import emit_pou, NLCfg, DocEntry, NLLevel
+
 import logging
 logging.basicConfig(level=logging.DEBUG)
+
+docs = {
+  "USHLW": DocEntry(summary="Logical left shift: OUT1 = IN1 << IN2."),
+  "FB_Multi": DocEntry(summary="FB with one input and multiple outputs (OUT1, OUT2)."),
+  "FB_Test": DocEntry(summary="FB is Function."),
+}
 
 def dump_callir(ir):
     print(f"[CallIR] kind={ir.call_kind} callee={ir.callee} @ {ir.loc.file}:{ir.loc.line}")
@@ -38,7 +46,6 @@ def dump_callir(ir):
             print(f"   - out: {type(out.target).__name__}:{getattr(out.target,'name',out.target)}")
     else:
         print("   - out: (none)")
-
 
 def dump_expr(e, indent=0):
     pad = " " * indent
@@ -214,31 +221,58 @@ def test_normalize(pou):
     print(f"[SUMMARY] CallIR count = {calls}")
 
 def main():
-    filename = "sample1.st"
+    filename = "sample2.st"
 
-    # 1) 读取和预处理 ST 文件
+    # -----------------------------
+    # 1) 读取 + 预处理
+    # -----------------------------
     st_code = read_st_file(filename)
     processed = preprocess_st(st_code)
 
-    # 2) 解析并构建 AST
+    # -----------------------------
+    # 2) 解析 + AST 构建
+    # -----------------------------
     tree, parser = parse_st_code_debug(processed)
     builder = ASTBuilder(filename=filename)
     pous = builder.visit(tree)
 
+    # -----------------------------
+    # 3) NL 配置 + 指令文档
+    # -----------------------------
+    cfg = NLCfg(nl_level=NLLevel.FINE, enable_enriched=True)
+
+    # 示例指令文档（你后续会替换为真实文档解析器）
+    docs = {
+        "USHLW": DocEntry(summary="Logical left shift: OUT = IN << N"),
+        # "FB_Multi": DocEntry(...)  # FB 可先不加
+    }
+
+    # -----------------------------
+    # 4) 对每个 POU 做三件事：
+    #    A. 打印 POU 名
+    #    B. 验证 CallIR（只统计一次）
+    #    C. 生成 NL
+    # -----------------------------
     for pou in pous:
+        print("=" * 80)
         print(f"POU: {pou.name}")
 
+        # ---- A) CallIR 验证（Normalize 是否正确）----
         call_count = 0
         for stmt in walk_stmts(pou.body):
             cir = stmt_to_callir(stmt)
             if cir is None:
                 continue
-
             call_count += 1
-            dump_callir(cir)   # 只在这里打印一次
+            dump_callir(cir)
 
         print(f"[SUMMARY] total calls extracted: {call_count}")
 
+        # ---- B) NL 生成（统一风格 + 可控粒度）----
+        print("\n--- Generated NL ---")
+        lines = emit_pou(pou, cfg, docs)
+        print("\n".join(lines))
+        print()
 
 if __name__ == "__main__":
     main()
