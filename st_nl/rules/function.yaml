@@ -1,0 +1,224 @@
+version: 1
+entries:
+  - name: UEQB
+    kind: function
+    summary: "Unsigned 8-bit equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: USINT
+          direction: in
+        - name: IN2
+          type: USINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Equal comparison: {OUT1} = ({IN1} == {IN2})"
+      bind: mixed
+    control_text:
+      template: "UEQB(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: UEQW
+    kind: function
+    summary: "Unsigned 16-bit equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UINT
+          direction: in
+        - name: IN2
+          type: UINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Equal comparison: {OUT1} = ({IN1} == {IN2})"
+      bind: mixed
+    control_text:
+      template: "UEQW(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: UEQD
+    kind: function
+    summary: "Unsigned 32-bit equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UDINT
+          direction: in
+        - name: IN2
+          type: UDINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Equal comparison: {OUT1} = ({IN1} == {IN2})"
+      bind: mixed
+    control_text:
+      template: "UEQD(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULEB
+    kind: function
+    summary: "Unsigned 8-bit less-than-or-equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: USINT
+          direction: in
+        - name: IN2
+          type: USINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-or-equal comparison: {OUT1} = ({IN1} <= {IN2})"
+      bind: mixed
+    control_text:
+      template: "ULEB(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULEW
+    kind: function
+    summary: "Unsigned 16-bit less-than-or-equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UINT
+          direction: in
+        - name: IN2
+          type: UINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-or-equal comparison: {OUT1} = ({IN1} <= {IN2})"
+      bind: mixed
+    control_text:
+      template: "ULEW(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULED
+    kind: function
+    summary: "Unsigned 32-bit less-than-or-equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UDINT
+          direction: in
+        - name: IN2
+          type: UDINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-or-equal comparison: {OUT1} = ({IN1} <= {IN2})"
+      bind: mixed
+    control_text:
+      # 你原文出现了 "OUT1:=ULED(... OUT1 =>)" 这种混写，这里统一成命名参数样式
+      template: "ULED(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULTB
+    kind: function
+    summary: "Unsigned 8-bit less-than comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: USINT
+          direction: in
+        - name: IN2
+          type: USINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-than comparison: {OUT1} = ({IN1} < {IN2})"
+      bind: mixed
+    control_text:
+      template: "ULTB(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULTW
+    kind: function
+    summary: "Unsigned 16-bit less-than comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UINT
+          direction: in
+        - name: IN2
+          type: UINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-than comparison: {OUT1} = ({IN1} < {IN2})"
+      bind: mixed
+    control_text:
+      template: "ULTW(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: ULTD
+    kind: function
+    summary: "Unsigned 32-bit less-than comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: UDINT
+          direction: in
+        - name: IN2
+          type: UDINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Less-than comparison: {OUT1} = ({IN1} < {IN2})"
+      bind: mixed
+    control_text:
+      # 你原文控件文本写成 ULTD(IN1, IN2); 但语义说明又有 OUT1。为一致性这里按“有 OUT1”规范化
+      template: "ULTD(IN1 := {IN1}, IN2 := {IN2}, OUT1 => {OUT1});"
+    aliases: []
+
+  - name: UGEB
+    kind: function
+    summary: "Unsigned 8-bit greater-than-or-equal comparison."
+    signature:
+      inputs:
+        - name: IN1
+          type: USINT
+          direction: in
+        - name: IN2
+          type: USINT
+          direction: in
+      outputs:
+        - name: OUT1
+          type: BOOL
+          direction: out
+    semantics:
+      template: "Greater-or-equal comparison: {OUT1} = ({IN1} >= {IN2})"
+      bind: mixed
+    control_text:
+      # 你原文控件文本是 OUT1:=UGEB(IN1, IN2); 这里同时兼容命名参数绑定
+      template: "OUT1 := UGEB({IN1}, {IN2});"
+    aliases: []

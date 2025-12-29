@@ -22,9 +22,12 @@ from st_nl.rules.base import (
     emit_assign_rule,
     emit_continue_rule,
     emit_call_rule,
+    emit_exit_rule,
+    emit_return_rule,
 )
 
 from st_nl.nl.templates import tpl_assign
+from st_nl.rules.semantic_catalog import SemanticCatalog, norm_name
 
 # -----------------------
 # NL Level / Config
@@ -50,23 +53,12 @@ class NLCfg:
 
     render: RenderCfg = RenderCfg(expr_max_len=80)
 
-
-@dataclass(frozen=True)
-class DocEntry:
-    summary: str
-
-
-_PLACEHOLDER_RE = re.compile(r"\b(IN|OUT)(\d+)\b")
-
-
-def _strip_end_punct(s: str) -> str:
-    return (s or "").strip().rstrip(".!?").strip()
-
-
 # -----------------------
 # Action summarizer
 # -----------------------
-def summarize_block(stmts: List[N.Stmt], cfg: NLCfg, depth: int) -> str:
+def summarize_block(stmts: List[N.Stmt], ctx: EmitContext, depth: int) -> str:
+    cfg: NLCfg = ctx.cfg
+
     if depth > cfg.summary_max_depth:
         return "..."
 
@@ -78,149 +70,156 @@ def summarize_block(stmts: List[N.Stmt], cfg: NLCfg, depth: int) -> str:
 
         cir = stmt_to_callir(s)
         if cir is not None:
-            items.append(cir.callee)
+            # 1) 先拿 callee 名
+            name = cir.callee
+
+            # 2) 尝试把语义模板绑定进去（只在摘要里体现，不额外多行）
+            sem = None
+            catalog = getattr(ctx, "catalog", None)
+            if catalog is not None:
+                ent = catalog.lookup(name)
+                if ent is not None and ent.semantics_template:
+                    outs = [ctx.rexpr(o.target) for o in (cir.outputs or [])]
+                    pos_ins = [ctx.rexpr(i.expr) for i in (cir.inputs or []) if i.name is None]
+
+                    named_ins = {}
+                    named_outs = {}
+                    for i in (cir.inputs or []):
+                        if i.name is None:
+                            continue
+                        nm = i.name.upper()
+                        if nm.startswith("IN"):
+                            named_ins[nm] = ctx.rexpr(i.expr)
+                        elif nm.startswith("OUT"):
+                            if getattr(i, "direction", "") in ("out", "inout"):
+                                # 这里 OUT 参数 expr 通常是变量引用
+                                named_outs[nm] = ctx.rexpr(i.expr)
+
+                    bound = catalog.bind_template(
+                        ent.semantics_template,
+                        outs=outs,
+                        pos_ins=pos_ins,
+                        named_ins=named_ins,
+                        named_outs=named_outs,
+                    )
+                    sem = bound.strip()
+
+            # 3) 摘要串：带语义就更“可学习”
+            if sem:
+                items.append(f"{name}[{sem}]")
+            else:
+                items.append(name)
             continue
 
         if isinstance(s, N.Assignment):
-            items.append(f"assign {render_expr(s.target, cfg.render)}")
+            lhs = ctx.rexpr(s.target)
+            rhs = ctx.rexpr(s.value)
+            items.append(f"{lhs}={rhs}")
             continue
 
         if isinstance(s, N.IfStmt):
-            items.append("if(...)")
-            items.append(summarize_block(s.then_body, cfg, depth + 1))
+            items.append(f"if({ctx.rexpr(s.cond)})")
             continue
 
         if isinstance(s, N.CaseStmt):
-            items.append("case(...)")
+            items.append(f"case({ctx.rexpr(s.cond)})")
             continue
 
-        if isinstance(s, (N.ForStmt, N.WhileStmt, N.RepeatStmt)):
-            items.append(type(s).__name__.replace("Stmt", "").lower())
+        if isinstance(s, N.ForStmt):
+            items.append("for(...)")
+            continue
+        if isinstance(s, N.WhileStmt):
+            items.append("while(...)")
+            continue
+        if isinstance(s, N.RepeatStmt):
+            items.append("repeat(...)")
             continue
 
         items.append(type(s).__name__)
 
     return cfg.summary_joiner.join([x for x in items if x])
 
-
-# -----------------------
-# Generic emitters
-# -----------------------
-def emit_generic_call(cir, cfg: NLCfg) -> str:
-    ins: List[str] = []
-    for inp in cir.inputs:
-        nm = inp.name if inp.name is not None else "<pos>"
-        expr = render_expr(inp.expr, cfg.render)
-        dir_ = getattr(inp, "direction", "in") or "in"
-        ins.append(f"{nm}={expr}({dir_})")
-
-    outs = [render_expr(o.target, cfg.render) for o in cir.outputs]
-    in_s = ", ".join(ins)
-    out_s = ", ".join(outs) if outs else "<no_out>"
-
-    if cir.call_kind == "function":
-        return f"Call function: {out_s} <- {cir.callee}({in_s})"
-    else:
-        return f"Call FB: {out_s} <- {cir.callee}({in_s})"
-
-
-def emit_generic_stmt(stmt: N.Stmt, ctx: EmitContext) -> NLFragment:
-    cfg: NLCfg = ctx.cfg
-
-    cir = stmt_to_callir(stmt)
-    if cir is not None:
-        return NLFragment([NLLine(emit_generic_call(cir, cfg), raw=False)])
-
-    if isinstance(stmt, N.Assignment):
-        lhs = render_expr(stmt.target, cfg.render)
-        rhs = render_expr(stmt.value, cfg.render)
-        # 注意：tpl_assign 输出的是 "="，你后续想保留 ":=" 可再改模板
-        return NLFragment([NLLine(tpl_assign(lhs, rhs), raw=False)])
-
-    if isinstance(stmt, N.ContinueStmt):
-        return NLFragment([NLLine("Continue loop", raw=False)])
-
-    return NLFragment([NLLine(f"Stmt {type(stmt).__name__}", raw=False)])
-
-
-# -----------------------
-# Semantics
-# -----------------------
-def _pos_inputs(cir) -> List[N.Expr]:
-    return [i.expr for i in cir.inputs if i.name is None]
-
-
-def enrich_ushlw(cir, cfg: NLCfg) -> str:
-    outs = cir.outputs or []
-    pos = _pos_inputs(cir)
-
-    if len(outs) < 1 or len(pos) < 2:
-        return "Semantics: Logical left shift"
-
-    lhs = render_expr(outs[0].target, cfg.render)
-    a0  = render_expr(pos[0], cfg.render)
-    a1  = render_expr(pos[1], cfg.render)
-    return f"Semantics: Logical left shift: {lhs} = {a0} << {a1}"
-
-
-def maybe_enrich(stmt: N.Stmt, docs: Dict[str, DocEntry], cfg: NLCfg) -> Optional[str]:
-    if not cfg.enable_enriched:
+def maybe_enrich(stmt: N.Stmt, ctx: EmitContext) -> Optional[NLFragment]:
+    if not getattr(ctx.cfg, "enable_enriched", False):
         return None
 
     cir = stmt_to_callir(stmt)
     if cir is None:
         return None
 
-    if cir.callee == "USHLW" and cir.call_kind == "function":
-        return enrich_ushlw(cir, cfg)
-
-    doc = docs.get(cir.callee)
-    if doc is None:
+    catalog = ctx.catalog
+    ent = catalog.lookup(cir.callee) if catalog else None
+    if ent is None or not ent.semantics_template:
         return None
-    return f"Semantics: {doc.summary}"
+
+    # ---- 绑定材料 ----
+    outs = [ctx.rexpr(o.target) for o in (cir.outputs or [])]
+    pos_ins = [ctx.rexpr(i.expr) for i in (cir.inputs or []) if i.name is None]
+
+    named_ins = {}
+    named_outs = {}
+    for i in (cir.inputs or []):
+        if i.name is None:
+            continue
+        nm = i.name.upper()
+        if nm.startswith("IN"):
+            named_ins[nm] = ctx.rexpr(i.expr)
+        elif nm.startswith("OUT"):
+            if getattr(i, "direction", "") in ("out", "inout"):
+                named_outs[nm] = ctx.rexpr(i.expr)
+
+    bound = catalog.bind_template(
+        ent.semantics_template,
+        outs=outs,
+        pos_ins=pos_ins,
+        named_ins=named_ins,
+        named_outs=named_outs,
+    )
+
+    return NLFragment([NLLine(f"Semantics: {bound}", raw=False)])
 
 
-# -----------------------
 # Dispatcher (always returns NLFragment)
-# -----------------------
-def emit_stmt(stmt: N.Stmt, ctx: EmitContext, depth: int = 0) -> NLFragment:
-    cfg: NLCfg = ctx.cfg
-    docs: Dict[str, DocEntry] = ctx.docs
 
+def emit_stmt(stmt: N.Stmt, ctx: EmitContext, depth: int = 0) -> NLFragment:
+    # 1) 控制流规则（你已经迁移好了）
     if isinstance(stmt, N.IfStmt):
         return emit_if_rule(stmt, ctx, depth, emit_stmt, summarize_block)
-
     if isinstance(stmt, N.CaseStmt):
         return emit_case_rule(stmt, ctx, depth, emit_stmt, summarize_block)
-
     if isinstance(stmt, N.ForStmt):
         return emit_for_rule(stmt, ctx, depth, emit_stmt, summarize_block)
-
     if isinstance(stmt, N.WhileStmt):
         return emit_while_rule(stmt, ctx, depth, emit_stmt, summarize_block)
-
     if isinstance(stmt, N.RepeatStmt):
         return emit_repeat_rule(stmt, ctx, depth, emit_stmt, summarize_block)
 
-    # ---- 普通语句：Call / Assign / Continue / fallback + (可选) Enriched ----
-    frag = (
-        emit_call_rule(stmt, ctx)
-        or emit_assign_rule(stmt, ctx)
-        or emit_continue_rule(stmt, ctx)
-    )
+    # 2) 普通语句规则：call/assign/return/exit/continue...
+    frag: Optional[NLFragment] = None
+
+    # 你如果把 emit_call_rule/emit_assign_rule 放在 control_flow.py 里也没问题
+    frag = frag or emit_call_rule(stmt, ctx)
+    frag = frag or emit_assign_rule(stmt, ctx)
+    frag = frag or emit_return_rule(stmt, ctx)   # 若你已实现
+    frag = frag or emit_exit_rule(stmt, ctx)     # 若你已实现
+    frag = frag or emit_continue_rule(stmt, ctx)
 
     if frag is None:
         frag = NLFragment([NLLine(f"Stmt {type(stmt).__name__}", raw=False)])
 
-    extra = maybe_enrich(stmt, docs, cfg)
+    # 3) Enriched：统一在 dispatcher 追加（保证 Call 后紧跟 Semantics）
+    extra = maybe_enrich(stmt, ctx)
     if extra:
-        frag = NLFragment(frag.lines + [NLLine(extra, raw=False)])
+        frag = NLFragment(frag.lines + extra.lines)
 
     return frag
 
-
-def emit_pou(pou: N.ProgramDecl | N.FBDecl, cfg: NLCfg, docs: Dict[str, DocEntry]) -> List[str]:
-    ctx = EmitContext(cfg=cfg, docs=docs)
+def emit_pou(
+    pou: N.ProgramDecl | N.FBDecl,
+    cfg: NLCfg,
+    catalog,   # SemanticCatalog
+) -> List[str]:
+    ctx = EmitContext(cfg=cfg, catalog=catalog)
 
     lines: List[NLLine] = [NLLine(f"POU {pou.name}", raw=False)]
     for s in pou.body:

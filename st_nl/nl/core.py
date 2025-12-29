@@ -29,10 +29,12 @@ class NLFragment:
 @dataclass
 class EmitContext:
     """
-    duck-typed cfg：只要求有 cfg.nl_level / cfg.render / cfg.fine_* 等字段
+    cfg: 只要求有 cfg.nl_level / cfg.render / cfg.fine_* 等字段
+    catalog: SemanticCatalog（建议不要在 core.py 里强依赖具体类型，用 Any 即可）
     """
     cfg: Any
-    docs: Dict[str, Any]
+    catalog: Any  # <- 关键：新增
+    # 你如果还想保留 docs 备用，可以加：docs: Optional[dict] = None
 
     def rexpr(self, e: N.Expr) -> str:
         return render_expr(e, self.cfg.render)

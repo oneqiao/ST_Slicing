@@ -28,11 +28,10 @@ FOR i := 0 TO 2 BY 1 DO
           FB_Multi(IN1 := A, OUT1 => OUT1, OUT2 => OUT2);
         END_IF;
 
-    ELSE
-      WHILE C > 0 DO
-        OUT1 := OUT2;
-        C := C - 1;
-      END_WHILE;
+        WHILE C > 0 DO
+          OUT1 := OUT2;
+          C := C - 1;
+        END_WHILE;
     END_CASE;
 
   ELSIF A = 0 THEN

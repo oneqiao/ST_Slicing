@@ -1,177 +1,20 @@
-# test_nl.main.py
-
 from pathlib import Path
 from antlr4 import CommonTokenStream, InputStream
-from antlr4.tree.Trees import Trees
-from typing import Iterable
 
-# 1) 按你的项目实际路径修改这两个 import
-#    - preprocess_st: 你写的预处理函数
-#    - IEC61131Lexer / IEC61131Parser: generated 目录生成的类
 from st_nl.parser.preprocess import preprocess_st
 from st_nl.generated.IEC61131Lexer import IEC61131Lexer
 from st_nl.generated.IEC61131Parser import IEC61131Parser
-
-from st_nl.ast.builder import ASTBuilder  # 按你的实际路径改
-from st_nl.ast.nodes import (
-    ProgramDecl, FBDecl,
-    VarDecl,
-    Assignment, IfStmt, ForStmt, WhileStmt, RepeatStmt, CallStmt, CaseStmt,
-    VarRef, ArrayAccess, FieldAccess, CallExpr, Literal, BinOp, UnaryOp,
-)
-from st_nl.ir.normalize import normalize_stmt
-from st_nl.ir.nodes import CallIR
+from st_nl.ast.builder import ASTBuilder
 from st_nl.ast import nodes as N
 from st_nl.nl.ir import stmt_to_callir
-
-from st_nl.nl.generate import emit_pou, NLCfg, DocEntry, NLLevel
-
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-docs = {
-  "USHLW": DocEntry(summary="Logical left shift: OUT1 = IN1 << IN2."),
-  "FB_Multi": DocEntry(summary="FB with one input and multiple outputs (OUT1, OUT2)."),
-  "FB_Test": DocEntry(summary="FB is Function."),
-}
-
-def dump_callir(ir):
-    print(f"[CallIR] kind={ir.call_kind} callee={ir.callee} @ {ir.loc.file}:{ir.loc.line}")
-    if ir.inputs:
-        for inp in ir.inputs:
-            nm = inp.name if inp.name is not None else "<pos>"
-            print(f"   - in : {nm} dir={inp.direction} expr={type(inp.expr).__name__}:{getattr(inp.expr,'name',getattr(inp.expr,'value',''))}")
-    if ir.outputs:
-        for out in ir.outputs:
-            print(f"   - out: {type(out.target).__name__}:{getattr(out.target,'name',out.target)}")
-    else:
-        print("   - out: (none)")
-
-def dump_expr(e, indent=0):
-    pad = " " * indent
-    if e is None:
-        print(pad + "Expr: <None>")
-        return
-    t = type(e).__name__
-    if t == "VarRef":
-        print(pad + f"VarRef(name={e.name})")
-    elif t == "Literal":
-        print(pad + f"Literal(value={e.value}, type={e.type})")
-    elif t == "ArrayAccess":
-        print(pad + "ArrayAccess(")
-        dump_expr(e.base, indent + 2)
-        dump_expr(e.index, indent + 2)
-        print(pad + ")")
-    elif t == "FieldAccess":
-        print(pad + f"FieldAccess(field={e.field})(")
-        dump_expr(e.base, indent + 2)
-        print(pad + ")")
-    elif t == "CallExpr":
-        argc = len(e.pos_args) + len(e.named_args)
-        print(pad + f"CallExpr(func={e.func}, argc={argc})")
-        for a in e.pos_args:
-            dump_expr(a, indent + 2)
-        for na in e.named_args:
-            print(pad + f"  NamedArg({na.name}=")
-            dump_expr(na.value, indent + 4)
-            print(pad + "  )")
-    elif t == "TupleExpr":
-        print(pad + "TupleExpr(")
-        for item in e.items:
-            dump_expr(item, indent + 2)
-        print(pad + ")")
-    elif t == "UnaryOp":
-        print(pad + f"UnaryOp(op={e.op})(")
-        dump_expr(e.operand, indent + 2)
-        print(pad + ")")
-    elif t == "BinOp":
-        print(pad + f"BinOp(op={e.op})(")
-        dump_expr(e.left, indent + 2)
-        dump_expr(e.right, indent + 2)
-        print(pad + ")")
-    else:
-        # fallback：避免因为某节点没覆盖导致崩
-        print(pad + f"{t}: {getattr(e, 'name', '') or str(e)}")
-
-
-def dump_stmt(s, indent=0):
-    pad = " " * indent
-    if s is None:
-        print(pad + "Stmt: <None>")
-        return
-    t = type(s).__name__
-
-    if t == "Assignment":
-        print(pad + "Assignment(")
-        print(pad + "  target=")
-        dump_expr(s.target, indent + 4)
-        print(pad + "  value=")
-        dump_expr(s.value, indent + 4)
-        print(pad + ")")
-    elif t == "CallStmt":
-        pos = getattr(s, "pos_args", None)
-        named = getattr(s, "named_args", None)
-
-        if pos is None and named is None and hasattr(s, "args"):
-            pos = []
-            named = []
-            for a in s.args:
-                if type(a).__name__ == "NamedArg":
-                    named.append(a)
-                else:
-                    pos.append(a)
-
-        pos = pos or []
-        named = named or []
-
-        argc = len(pos) + len(named)
-        print(pad + f"CallStmt(name={s.fb_name}, argc={argc})")
-        for a in pos:
-            dump_expr(a, indent + 2)
-
-        for na in named:
-            print(pad + f"  NamedArg({na.name}=")
-            dump_expr(na.value, indent + 4)
-            print(pad + "  )")
-    elif t == "IfStmt":
-        print(pad + "IfStmt(cond=")
-        dump_expr(s.cond, indent + 2)
-        print(pad + "then:")
-        for x in s.then_body:
-            dump_stmt(x, indent + 2)
-        if getattr(s, "elif_branches", None):
-            print(pad + "elif:")
-            for (c, body) in s.elif_branches:
-                print(pad + "  elif_cond=")
-                dump_expr(c, indent + 4)
-                for x in body:
-                    dump_stmt(x, indent + 4)
-        if getattr(s, "else_body", None):
-            print(pad + "else:")
-            for x in s.else_body:
-                dump_stmt(x, indent + 2)
-        print(pad + ")")
-    elif t in ("ForStmt", "WhileStmt", "RepeatStmt", "CaseStmt"):
-        print(pad + f"{t}(...)")
-    else:
-        print(pad + f"{t}")
-
-def dump_pou(pou):
-    print("=" * 80)
-    print(f"POU: {type(pou).__name__} name={pou.name}")
-    print(f"Vars: {len(pou.vars)}  BodyStmts: {len(pou.body)}")
-    print("- Vars sample (first 5) -")
-    for v in pou.vars[:5]:
-        print(f"  {v.storage} {v.name} : {v.type}")
-    print("- Body AST (first 20 stmts) -")
-    for s in pou.body[:20]:
-        dump_stmt(s, 2)
+from st_nl.nl.render import render_expr  
+from st_nl.nl.generate import emit_pou, NLCfg, NLLevel
+from st_nl.rules.semantic_catalog import SemanticCatalog, norm_name
+from collections import Counter
+from pathlib import Path
 
 def read_st_file(filename: str, encoding: str = "utf-8") -> str:
-    """
-    从 test_nl/main.py 同目录读取 .st 文件
-    """
-    base_dir = Path(__file__).resolve().parent  # test_nl 目录
+    base_dir = Path(__file__).resolve().parent
     st_path = base_dir / filename
     if not st_path.exists():
         raise FileNotFoundError(f"ST file not found: {st_path}")
@@ -179,16 +22,13 @@ def read_st_file(filename: str, encoding: str = "utf-8") -> str:
 
 
 def parse_st_code_debug(code: str):
-    """
-    带调试输出的 parse：返回 tree 和 parser
-    """
     input_stream = InputStream(code)
     lexer = IEC61131Lexer(input_stream)
     token_stream = CommonTokenStream(lexer)
     parser = IEC61131Parser(token_stream)
-
-    tree = parser.start()  # 入口规则 start
+    tree = parser.start()  # 入口规则
     return tree, parser
+
 
 def walk_stmts(stmts):
     for s in stmts:
@@ -209,70 +49,143 @@ def walk_stmts(stmts):
                 yield from walk_stmts(e.body)
             yield from walk_stmts(s.else_body or [])
 
-def test_normalize(pou):
-    calls = 0
-    for s in walk_stmts(pou.body):
-        ir = normalize_stmt(s)
-        if isinstance(ir, CallIR):
-            calls += 1
-            outs = ", ".join(o.name or "<expr>" for o in ir.outputs) or "<no outs>"
-            ins  = ", ".join((a.name + ":=" if a.name else "") + type(a.expr).__name__ for a in ir.inputs)
-            print(f"[CallIR] {outs} <- {ir.callee}({ins}) @ line {ir.loc.line}")
-    print(f"[SUMMARY] CallIR count = {calls}")
+
+def dump_callir(ir):
+    print(f"[CallIR] kind={ir.call_kind} callee={ir.callee} @ {ir.loc.file}:{ir.loc.line}")
+    if ir.inputs:
+        for inp in ir.inputs:
+            nm = inp.name if inp.name is not None else "<pos>"
+            print(f"   - in : {nm} dir={getattr(inp,'direction','?')} expr={type(inp.expr).__name__}:{getattr(inp.expr,'name',getattr(inp.expr,'value',''))}")
+    if ir.outputs:
+        for out in ir.outputs:
+            print(f"   - out: {type(out.target).__name__}:{getattr(out.target,'name',out.target)}")
+    else:
+        print("   - out: (none)")
+
+
+def build_bind_maps(cir, cfg):
+    outs = [render_expr(o.target, cfg.render) for o in (cir.outputs or [])]
+
+    pos_ins = [
+        render_expr(i.expr, cfg.render)
+        for i in (cir.inputs or [])
+        if i.name is None
+    ]
+
+    named_ins = {}
+    named_outs = {}
+    for i in (cir.inputs or []):
+        if i.name is None:
+            continue
+        key = norm_name(i.name)
+        val = render_expr(i.expr, cfg.render)
+        d = getattr(i, "direction", "unknown")
+        if key.startswith("IN"):
+            named_ins[key] = val
+        if key.startswith("OUT") and d in ("out", "inout"):
+            named_outs[key] = val
+
+    return outs, pos_ins, named_ins, named_outs
+
+def _find_project_root(start: Path) -> Path:
+    """
+    从 start 开始向上找工程根目录：以“包含 st_nl 目录”为判定条件。
+    找不到就回退到 start 的父目录。
+    """
+    start = start.resolve()
+    for p in [start] + list(start.parents):
+        if (p / "st_nl").is_dir():
+            return p
+    return start.parent
 
 def main():
-    filename = "sample2.st"
+    filename = "sample3.st"
 
-    # -----------------------------
     # 1) 读取 + 预处理
-    # -----------------------------
     st_code = read_st_file(filename)
     processed = preprocess_st(st_code)
 
-    # -----------------------------
-    # 2) 解析 + AST 构建
-    # -----------------------------
-    tree, parser = parse_st_code_debug(processed)
+    # 2) 解析 + AST
+    tree, _parser = parse_st_code_debug(processed)
     builder = ASTBuilder(filename=filename)
     pous = builder.visit(tree)
 
-    # -----------------------------
-    # 3) NL 配置 + 指令文档
-    # -----------------------------
+    # 3) 相对工程根目录加载语义表（不写死绝对路径）
+    # test_nl/main.py 的 __file__ -> 向上找到包含 st_nl/ 的目录
+    project_root = _find_project_root(Path(__file__).parent)
+    yaml_path = project_root / "st_nl" / "rules" / "function.yaml"
+
+    if not yaml_path.exists():
+        raise FileNotFoundError(
+            f"semantic catalog yaml not found: {yaml_path}\n"
+            f"project_root resolved to: {project_root}\n"
+            f"current working dir: {Path.cwd()}"
+        )
+
+    catalog = SemanticCatalog.load_yaml(str(yaml_path))
+
+    # 4) lookup 自检（可保留）
+    for name in ["UEQB", "UEQW", "UGEB", "USHLW", "FB_MULTI"]:
+        e = catalog.lookup(name)
+        if e is None:
+            print(f"[CATALOG] {name}: NOT FOUND")
+        else:
+            print(f"[CATALOG] {name}: FOUND kind={e.kind} template={e.semantics_template}")
+
+    # 5) NL 配置
     cfg = NLCfg(nl_level=NLLevel.FINE, enable_enriched=True)
 
-    # 示例指令文档（你后续会替换为真实文档解析器）
-    docs = {
-        "USHLW": DocEntry(summary="Logical left shift: OUT = IN << N"),
-        # "FB_Multi": DocEntry(...)  # FB 可先不加
-    }
+    # 6) 语义命中率统计（全局）
+    total_calls = 0
+    semantic_hits = 0
+    missing_counter = Counter()   # callee -> miss count（包括 entry 不存在或无 template）
 
-    # -----------------------------
-    # 4) 对每个 POU 做三件事：
-    #    A. 打印 POU 名
-    #    B. 验证 CallIR（只统计一次）
-    #    C. 生成 NL
-    # -----------------------------
     for pou in pous:
         print("=" * 80)
         print(f"POU: {pou.name}")
 
-        # ---- A) CallIR 验证（Normalize 是否正确）----
-        call_count = 0
+        # 也可以同时统计每个 POU 的命中率（可选）
+        pou_total = 0
+        pou_hits = 0
+
+        # ---- A) CallIR 验证 & 命中率统计（不再打印 [BIND]）----
         for stmt in walk_stmts(pou.body):
             cir = stmt_to_callir(stmt)
             if cir is None:
                 continue
-            call_count += 1
+
+            total_calls += 1
+            pou_total += 1
+
             dump_callir(cir)
 
-        print(f"[SUMMARY] total calls extracted: {call_count}")
+            ent = catalog.lookup(cir.callee)
+            if ent is not None and getattr(ent, "semantics_template", None):
+                semantic_hits += 1
+                pou_hits += 1
+            else:
+                missing_counter[cir.callee] += 1
 
-        # ---- B) NL 生成（统一风格 + 可控粒度）----
+        print(f"[SUMMARY] total calls extracted: {pou_total}")
+        if pou_total > 0:
+            pou_rate = pou_hits / pou_total
+            print(f"[SUMMARY] semantic hit: {pou_hits}/{pou_total} = {pou_rate:.2%}")
+
+        # ---- B) NL 输出（由 generate.py 的 maybe_enrich 自动追加 Semantics）----
         print("\n--- Generated NL ---")
-        lines = emit_pou(pou, cfg, docs)
+        lines = emit_pou(pou, cfg, catalog)
         print("\n".join(lines))
         print()
+
+    # 7) 全局命中率报告 + 未命中 TopK
+    print("=" * 80)
+    print(f"[GLOBAL] semantic hit: {semantic_hits}/{total_calls} = {(semantic_hits/total_calls if total_calls else 0):.2%}")
+
+    if missing_counter:
+        print("[GLOBAL] missing semantics callee Top10:")
+        for callee, cnt in missing_counter.most_common(10):
+            print(f"  - {callee}: {cnt}")
+
 
 if __name__ == "__main__":
     main()

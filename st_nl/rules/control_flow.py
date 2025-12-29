@@ -33,7 +33,7 @@ from st_nl.nl.templates import (
 )
 
 EmitStmtFn = Callable[[N.Stmt, EmitContext, int], NLFragment]
-SummFn = Callable[[List[N.Stmt], object, int], str]
+SummFn = Callable[[List[N.Stmt], EmitContext, int], str]
 
 
 def _fine_expand_block(
@@ -169,7 +169,7 @@ def emit_case_rule(
             # 你当前 COARSE 的设计：不输出 actions，只输出结构也可以
             lines.append(NLLine("ELSE", raw=False))
         elif ctx.is_medium():
-            actions = summarize_block(stmt.else_body, ctx.cfg, depth + 1)
+            actions = summarize_block(stmt.else_body, ctx, depth + 1)
             lines.append(NLLine(tpl_else_actions(actions), raw=False))
         else:
             # FINE：ELSE actions:（空 => raw=True）+ 展开块
@@ -198,7 +198,7 @@ def emit_for_rule(
     lines.append(NLLine(tpl_for(stmt.var, start, end, step), raw=False))
 
     if ctx.is_medium():
-        actions = summarize_block(stmt.body, ctx.cfg, depth + 1)
+        actions = summarize_block(stmt.body, ctx, depth + 1)
         lines.append(NLLine(tpl_loop_actions(actions), raw=False))
     elif ctx.is_fine():
         lines.append(NLLine(tpl_loop_actions(), raw=True))
@@ -224,7 +224,7 @@ def emit_while_rule(
     lines.append(NLLine(tpl_while(cond), raw=False))
 
     if ctx.is_medium():
-        actions = summarize_block(stmt.body, ctx.cfg, depth + 1)
+        actions = summarize_block(stmt.body, ctx, depth + 1)
         lines.append(NLLine(tpl_loop_actions(actions), raw=False))
     elif ctx.is_fine():
         lines.append(NLLine(tpl_loop_actions(), raw=True))
@@ -251,7 +251,7 @@ def emit_repeat_rule(
     lines.append(NLLine(tpl_repeat(), raw=False))
 
     if ctx.is_medium():
-        actions = summarize_block(stmt.body, ctx.cfg, depth + 1)
+        actions = summarize_block(stmt.body, ctx, depth + 1)
         lines.append(NLLine(tpl_loop_actions(actions), raw=False))
     elif ctx.is_fine():
         lines.append(NLLine(tpl_loop_actions(), raw=True))
