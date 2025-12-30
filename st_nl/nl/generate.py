@@ -25,7 +25,7 @@ from st_nl.rules.base import (
     emit_exit_rule,
     emit_return_rule,
 )
-
+from st_nl.nl.describe import describe_pou
 from st_nl.nl.templates import tpl_assign
 from st_nl.rules.semantic_catalog import SemanticCatalog, norm_name
 
@@ -36,6 +36,7 @@ class NLLevel(Enum):
     COARSE = auto()
     MEDIUM = auto()
     FINE = auto()
+    SUMMARY = auto()
 
 
 @dataclass(frozen=True)
@@ -53,9 +54,7 @@ class NLCfg:
 
     render: RenderCfg = RenderCfg(expr_max_len=80)
 
-# -----------------------
 # Action summarizer
-# -----------------------
 def summarize_block(stmts: List[N.Stmt], ctx: EmitContext, depth: int) -> str:
     cfg: NLCfg = ctx.cfg
 
@@ -180,7 +179,6 @@ def maybe_enrich(stmt: N.Stmt, ctx: EmitContext) -> Optional[NLFragment]:
 
 
 # Dispatcher (always returns NLFragment)
-
 def emit_stmt(stmt: N.Stmt, ctx: EmitContext, depth: int = 0) -> NLFragment:
     # 1) 控制流规则（你已经迁移好了）
     if isinstance(stmt, N.IfStmt):
@@ -220,6 +218,10 @@ def emit_pou(
     catalog,   # SemanticCatalog
 ) -> List[str]:
     ctx = EmitContext(cfg=cfg, catalog=catalog)
+
+    if ctx.is_summary():
+        frag = describe_pou(pou, ctx)
+        return finalize_fragment(frag)
 
     lines: List[NLLine] = [NLLine(f"POU {pou.name}", raw=False)]
     for s in pou.body:

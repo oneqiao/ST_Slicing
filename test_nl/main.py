@@ -133,7 +133,7 @@ def main():
             print(f"[CATALOG] {name}: FOUND kind={e.kind} template={e.semantics_template}")
 
     # 5) NL 配置
-    cfg = NLCfg(nl_level=NLLevel.FINE, enable_enriched=True)
+    cfg = NLCfg(nl_level=NLLevel.SUMMARY, enable_enriched=True)
 
     # 6) 语义命中率统计（全局）
     total_calls = 0
@@ -157,7 +157,7 @@ def main():
             total_calls += 1
             pou_total += 1
 
-            dump_callir(cir)
+            #dump_callir(cir)
 
             ent = catalog.lookup(cir.callee)
             if ent is not None and getattr(ent, "semantics_template", None):

@@ -51,6 +51,9 @@ class EmitContext:
 
     def is_fine(self) -> bool:
         return self.level_name() == "FINE"
+    
+    def is_summary(self) -> bool:
+        return self.level_name() == "SUMMARY"
 
 
 def indent_fragment(frag: NLFragment, indent: str) -> NLFragment:

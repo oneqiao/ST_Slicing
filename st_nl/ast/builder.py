@@ -199,6 +199,8 @@ class ASTBuilder(IEC61131ParserVisitor):
             return self.visit(ctx.program_declaration())
         if ctx.function_block_declaration():
             return self.visit(ctx.function_block_declaration())
+        if ctx.function_declaration():  # NEW
+            return self.visit(ctx.function_declaration())
         return None
 
     # --------------------
@@ -227,6 +229,37 @@ class ASTBuilder(IEC61131ParserVisitor):
         vars_ = self.visit(ctx.var_decls()) if ctx.var_decls() else []
         body = self._extract_body(ctx.body()) if ctx.body() else []
         return FBDecl(name=name, vars=vars_, body=body, loc=self._loc(ctx))
+
+    def visitFunction_declaration(self, ctx):
+        # 1) 名称
+        name = ctx.name.text
+
+        # 2) 返回类型
+        if ctx.returnET is not None:
+            ret_type = ctx.returnET.getText()
+        else:
+            ret_type = ctx.returnID.text
+
+        # 3) 变量声明
+        vars_ = self.visit(ctx.var_decls()) or []
+
+        # 4) 建议：把“函数名本身”作为隐式返回变量加入 vars_
+        #    ST 里用 “FuncName := expr;” 作为返回赋值，很多库函数都是这么写的
+        loc = self._loc(ctx)
+        vars_.append(VarDecl(name=name, type=ret_type, storage="VAR", init_expr=None, loc=loc))
+
+        # 5) 函数体：funcBody -> statement_list
+        body_stmts = []
+        if ctx.funcBody() is not None and ctx.funcBody().statement_list() is not None:
+            body_stmts = self.visit(ctx.funcBody().statement_list()) or []
+
+        # 6) 最小复用策略：直接返回 ProgramDecl（只要具备 name/vars/body/loc 即可被 IRBuilder 使用）
+        return ProgramDecl(
+            name=name,
+            vars=vars_,
+            body=body_stmts,
+            loc=loc,
+        )
 
     # --------------------
     # VAR declarations
