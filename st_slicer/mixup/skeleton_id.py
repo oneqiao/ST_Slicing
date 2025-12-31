@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-main.py
-Smoke test pipeline:
-  (ST text/file) -> AST -> IR -> CFG -> Def-Use -> PDG
-and compute a structural signature: skeleton_id
-
-Usage:
-  # 1) Parse a real ST file (requires your ANTLR generated lexer/parser to be importable)
-  python main.py --st path/to/example.st
-
-  # 2) Demo mode (no parser needed): build a handcrafted AST and run IR/CFG/DU/PDG
-  python main.py --demo
-
-  # 3) Batch a directory of .st files
-  python main.py --st-dir path/to/st_dir --glob "*.st"
-
-  # Optional: write a jsonl summary for each POU
-  python main.py --st path/to/example.st --jsonl out.jsonl
-"""
-
 from __future__ import annotations
 
 import fnmatch
@@ -29,14 +9,23 @@ import importlib
 import json
 import os
 import re
-from dataclasses import asdict
-from pathlib import Path
+import math
 from typing import Any, Dict, List, Optional, Tuple
-from st_slicer.generated.IEC61131Lexer import IEC61131Lexer
-from st_slicer.generated.IEC61131Parser import IEC61131Parser
-from st_slicer.ast.builder import ASTBuilder
 
+# ============================================================
+# 配置：把路径写死在这里（按你本机目录修改）
+# ============================================================
+IN_DIR = r"F:\study\postgtaduate\AIPython\st_code\Mix_code\fixedCode"  # 输入：你清洗后的 fixedCode
+OUT_JSONL = r"F:\study\postgtaduate\AIPython\st_code\Mix_code\fixedCode\meta2.jsonl"
+FAILED_TXT = r"F:\study\postgtaduate\AIPython\st_code\Mix_code\fixedCode\failed_parse2.txt"
+GLOB_PAT = "*.st"
+
+# L2 是否保留 callee 名字（强烈建议 True）
+KEEP_CALLEE_L2 = True
+
+# ============================================================
 # Import helpers
+# ============================================================
 def _import_first(candidates: List[str]):
     last_err = None
     for name in candidates:
@@ -49,9 +38,8 @@ def _import_first(candidates: List[str]):
 
 def resolve_project_modules():
     """
-    Tries a few common layouts:
-      - package layout: st_slicer.ast.nodes, st_slicer.ir.ir_builder, ...
-      - flat layout (your uploaded filenames): nodes, ir_builder, cfg_builder, def_use, pdg_builder
+    你的项目 layout 兼容：
+      - st_slicer.ast.nodes / st_slicer.ir.ir_builder / st_slicer.cfg.cfg_builder / st_slicer.dataflow.def_use / st_slicer.pdg.pdg_builder
     """
     ast_nodes_mod = _import_first([
         "st_slicer.ast.nodes",
@@ -63,12 +51,6 @@ def resolve_project_modules():
         "st_slicer.ir.ir_builder",
         "ir.ir_builder",
         "ir_builder",
-    ])
-
-    ir_nodes_mod = _import_first([
-        "st_slicer.ir.ir_nodes",
-        "ir.ir_nodes",
-        "ir_nodes",
     ])
 
     cfg_builder_mod = _import_first([
@@ -92,40 +74,32 @@ def resolve_project_modules():
     return {
         "ast_nodes": ast_nodes_mod,
         "ir_builder": ir_builder_mod,
-        "ir_nodes": ir_nodes_mod,
         "cfg_builder": cfg_builder_mod,
         "def_use": def_use_mod,
         "pdg_builder": pdg_builder_mod,
     }
 
 
-# ST -> AST (optional)
+# ============================================================
+# ST -> AST
+# ============================================================
 def parse_st_to_pous(st_text: str, filename: str) -> List[Any]:
-    """
-    Parse ST text using your ANTLR-generated lexer/parser if available.
-
-    Expected modules (common):
-      - st_slicer.ast.generated.IEC61131Lexer / IEC61131Parser
-      - st_slicer.ast.builder.ASTBuilder  (visitor)
-    If these are not present, raise and let caller fallback to --demo.
-    """
-    # antlr runtime
     from antlr4 import InputStream, CommonTokenStream  # type: ignore
 
-    # Try likely generated module paths
     lexer_mod = _import_first([
-        "st_slicer.generated.IEC61131Lexer",      # 你的真实路径
-        "st_slicer.ast.generated.IEC61131Lexer",  # 兼容旧路径（可留）
+        "st_slicer.generated.IEC61131Lexer",
+        "st_slicer.ast.generated.IEC61131Lexer",
         "ast.generated.IEC61131Lexer",
         "generated.IEC61131Lexer",
     ])
 
     parser_mod = _import_first([
-        "st_slicer.generated.IEC61131Parser",      # 你的真实路径
-        "st_slicer.ast.generated.IEC61131Parser",  # 兼容旧路径（可留）
+        "st_slicer.generated.IEC61131Parser",
+        "st_slicer.ast.generated.IEC61131Parser",
         "ast.generated.IEC61131Parser",
         "generated.IEC61131Parser",
     ])
+
     builder_mod = _import_first([
         "st_slicer.ast.builder",
         "ast.builder",
@@ -141,19 +115,17 @@ def parse_st_to_pous(st_text: str, filename: str) -> List[Any]:
     tokens = CommonTokenStream(lexer)
     parser = IEC61131Parser(tokens)
 
-    # Start rule: try common ones
     start_rule = None
-    for rule_name in ("start", "program", "compilationUnit", "pou", "pous"):
+    for rule_name in ("start", "compilationUnit", "pou", "pous", "program"):
         if hasattr(parser, rule_name):
             start_rule = getattr(parser, rule_name)
             break
     if start_rule is None:
-        raise RuntimeError("Cannot find a parser start rule among: start/program/compilationUnit/pou/pous")
+        raise RuntimeError("Cannot find parser start rule among: start/compilationUnit/pou/pous/program")
 
     tree = start_rule()
     visitor = ASTBuilder(filename=filename)
 
-    # Your builder exposes visitStart in code; fall back to generic visit if needed.
     if hasattr(visitor, "visitStart"):
         pous = visitor.visitStart(tree)
     else:
@@ -165,122 +137,329 @@ def parse_st_to_pous(st_text: str, filename: str) -> List[Any]:
         return pous
     return [pous]
 
-# Pretty printing + skeleton_id
-_TEMP_RE = re.compile(r"^t\d+$")
 
+# ============================================================
+# Advanced normalization for skeleton ids
+# ============================================================
+_TEMP_RE = re.compile(r"^t\d+$", re.IGNORECASE)
 
 def _is_temp(name: str) -> bool:
-    return bool(_TEMP_RE.match(name))
+    return bool(name) and bool(_TEMP_RE.match(name))
 
+_NUM_RE = re.compile(r"^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$")
 
-def _is_const(token: str) -> bool:
-    # crude but practical: integers, floats, TRUE/FALSE, quoted strings
-    if token.upper() in ("TRUE", "FALSE"):
+def _is_const(token: Optional[str]) -> bool:
+    if token is None:
+        return False
+    t = token.strip()
+    if not t:
+        return False
+    if t.upper() in ("TRUE", "FALSE"):
         return True
-    if re.fullmatch(r"-?\d+(\.\d+)?", token):
+    if _NUM_RE.match(t):
         return True
-    if (len(token) >= 2 and ((token[0] == "'" and token[-1] == "'") or (token[0] == '"' and token[-1] == '"'))):
+    if len(t) >= 2 and ((t[0] == "'" and t[-1] == "'") or (t[0] == '"' and t[-1] == '"')):
         return True
     return False
 
+def _log2bin(x: int) -> int:
+    x = max(0, int(x))
+    return int(math.log2(x + 1))
 
-def compute_skeleton_id(ir_instrs: List[Any], keep_callee: bool = True) -> str:
+def compute_bucket_z(z_vec: Dict[str, Any], n_ir_call: int) -> str:
     """
-    Structural signature for one POU, intended for "structure-bucket" sampling/augmentation.
-
-    Normalizations:
-      - labels normalized by encounter order: L0, L1, ...
-      - variables normalized by encounter order: v0, v1, ...
-      - temps tN kept as 't'
-      - constants mapped to 'c'
-      - calls include (callee or fK) + arity
+    一个“分层桶兜底”的 Z-bucket：
+    - 对规模类特征做 log2 分箱（避免过碎）
+    - 对结构关键点保持离散（branch、backedge）
+    你后续可以很方便地调哪些维度进入 bucket。
     """
-    label_map: Dict[str, str] = {}
-    var_map: Dict[str, str] = {}
-    callee_map: Dict[str, str] = {}
+    n_instr = int(z_vec.get("n_instr", 0))
+    n_edges = int(z_vec.get("n_cfg_edges", 0))
+    n_branch = int(z_vec.get("n_branch", 0))
+    n_backedge = int(z_vec.get("n_backedge", 0))
+    n_pdg_data = int(z_vec.get("n_pdg_data_edges", 0))
+    n_pdg_ctrl = int(z_vec.get("n_pdg_ctrl_edges", 0))
 
-    def norm_label(lb: str) -> str:
-        if lb not in label_map:
-            label_map[lb] = f"L{len(label_map)}"
-        return label_map[lb]
+    # 分层：规模用 log2bin，结构用原子离散/布尔
+    return (
+        f"I{_log2bin(n_instr)}"
+        f"_E{_log2bin(n_edges)}"
+        f"_B{min(n_branch, 7)}"          # branch 过大时截断，避免桶碎
+        f"_L{1 if n_backedge > 0 else 0}"
+        f"_C{_log2bin(n_ir_call)}"
+        f"_PD{_log2bin(n_pdg_data)}"
+        f"_PC{_log2bin(n_pdg_ctrl)}"
+    )
 
-    def norm_var(x: Optional[str]) -> str:
-        if x is None:
-            return "None"
-        if _is_const(x):
-            return "c"
-        if _is_temp(x):
-            return "t"
-        # treat everything else as "program var"
-        if x not in var_map:
-            var_map[x] = f"v{len(var_map)}"
-        return var_map[x]
+def _const_bucket(token: str) -> str:
+    """
+    将常量分箱，减少“具体值”导致的裂桶：
+      - BOOL
+      - INT: 0/1/-1/SMALL(2..8)/NEG_SMALL(-2..-8)/INT
+      - REAL
+      - STR
+      - OTHER_CONST
+    """
+    t = token.strip()
+    up = t.upper()
+    if up in ("TRUE", "FALSE"):
+        return "BOOL"
+    if len(t) >= 2 and ((t[0] == "'" and t[-1] == "'") or (t[0] == '"' and t[-1] == '"')):
+        return "STR"
 
-    def norm_callee(c: str) -> str:
-        if keep_callee:
+    # numeric
+    if _NUM_RE.match(t):
+        # try int first
+        try:
+            if "." not in t and "e" not in t.lower():
+                v = int(t, 10)
+                if v == 0:
+                    return "I0"
+                if v == 1:
+                    return "I1"
+                if v == -1:
+                    return "IM1"
+                if 2 <= v <= 8:
+                    return "IS"
+                if -8 <= v <= -2:
+                    return "INS"
+                return "I"
+            # float
+            _ = float(t)
+            return "R"
+        except Exception:
+            return "NUM"
+    return "CONST"
+
+
+COMMUTATIVE_OPS = {
+    "+", "*", "AND", "OR", "XOR", "=",
+}
+
+def _op_norm(op: str) -> str:
+    return (op or "").upper()
+
+
+def _callee_family(callee: str) -> str:
+    """
+    L1 层：把 callee 归一为“功能族”，用于兜底桶。
+    你可以按 ST 指令集继续扩展。
+    """
+    u = (callee or "").upper()
+
+    if "_TO_" in u or u.endswith("_TO") or u.startswith("TO_"):
+        return "TYPE_CONV"
+    if "SHL" in u or "SHR" in u or u in {"USHLW", "USHRW", "SHL", "SHR"}:
+        return "SHIFT"
+    if u.startswith(("GT", "GE", "LT", "LE", "EQ", "NE")) or "CMP" in u:
+        return "CMP"
+    if u in {"ADD", "SUB", "MUL", "DIV", "MOD"}:
+        return "ARITH"
+    if u in {"AND", "OR", "XOR", "NOT"}:
+        return "LOGIC"
+
+    # 常见库函数可按需加白名单
+    return "CALL"
+
+
+class RoleVarEncoder:
+    """
+    变量“角色化”编码器：
+      - 同一 role 内独立编号，降低“出现顺序差异”对 skeleton 的影响
+      - temp/const 单独处理
+    """
+    def __init__(self, const_mode: str):
+        """
+        const_mode:
+          - "bucket": 用 _const_bucket 分箱
+          - "collapse": 常量全部折叠为 "C"
+        """
+        self.const_mode = const_mode
+        self.role_maps: Dict[str, Dict[str, str]] = {}
+        self.label_map: Dict[str, str] = {}
+        self.callee_map: Dict[str, str] = {}
+
+    def norm_label(self, lb: str) -> str:
+        if lb not in self.label_map:
+            self.label_map[lb] = f"L{len(self.label_map)}"
+        return self.label_map[lb]
+
+    def norm_callee(self, c: str, keep: bool, l1: bool) -> str:
+        if l1:
+            return _callee_family(c)
+        if keep:
             return c
-        if c not in callee_map:
-            callee_map[c] = f"f{len(callee_map)}"
-        return callee_map[c]
+        # 若不保留，改成 f0/f1...
+        if c not in self.callee_map:
+            self.callee_map[c] = f"f{len(self.callee_map)}"
+        return self.callee_map[c]
 
-    tokens: List[str] = []
+    def norm_atom(self, x: Optional[str], role: str) -> str:
+        if x is None:
+            return "N"
+        s = str(x)
+
+        if _is_const(s):
+            if self.const_mode == "collapse":
+                return "C"
+            return f"C:{_const_bucket(s)}"
+
+        if _is_temp(s):
+            return "T"
+
+        # program var: role-based stable ids
+        if role not in self.role_maps:
+            self.role_maps[role] = {}
+        rm = self.role_maps[role]
+        if s not in rm:
+            rm[s] = f"{role}{len(rm)}"
+        return rm[s]
+
+    def shape_atom(self, x: Optional[str]) -> str:
+        """
+        给 IRCall 的参数用：只保留“形态”，不引入 role 编号，避免轻易裂桶。
+        """
+        if x is None:
+            return "N"
+        s = str(x)
+        if _is_const(s):
+            if self.const_mode == "collapse":
+                return "C"
+            return f"C{_const_bucket(s)}"
+        if _is_temp(s):
+            return "T"
+        return "V"
+
+
+def _compute_skeleton_tokens(
+    ir_instrs: List[Any],
+    *,
+    keep_callee: bool,
+    l1: bool,
+) -> List[str]:
+    """
+    输出一组 tokens，用于 hash：
+      - l1=False: L2（严格）
+      - l1=True : L1（松，callee 族归一 + 常量折叠）
+    """
+    enc = RoleVarEncoder(const_mode=("collapse" if l1 else "bucket"))
+    toks: List[str] = []
+
     for instr in ir_instrs:
         cname = instr.__class__.__name__
 
         if cname == "IRLabel":
-            tokens.append(f"LABEL({norm_label(instr.name)})")
+            toks.append(f"LABEL({enc.norm_label(instr.name)})")
 
         elif cname == "IRGoto":
-            tokens.append(f"GOTO({norm_label(instr.target_label)})")
+            toks.append(f"GOTO({enc.norm_label(instr.target_label)})")
 
         elif cname == "IRBranchCond":
-            tokens.append(f"BR({norm_var(instr.cond)},{norm_label(instr.true_label)},{norm_label(instr.false_label)})")
+            # cond role
+            cond = enc.norm_atom(getattr(instr, "cond", None), role="cond")
+            tl = enc.norm_label(instr.true_label)
+            fl = enc.norm_label(instr.false_label)
+            toks.append(f"BR({cond},{tl},{fl})")
 
         elif cname == "IRAssign":
-            tokens.append(f"ASSIGN({norm_var(instr.target)},{norm_var(instr.src)})")
+            # target/src roles
+            tgt = enc.norm_atom(getattr(instr, "target", None), role="lhs")
+            src = enc.norm_atom(getattr(instr, "src", None), role="rhs")
+            toks.append(f"ASG({tgt},{src})")
 
         elif cname == "IRBinOp":
-            tokens.append(f"BIN({instr.op},{norm_var(instr.dest)},{norm_var(instr.left)},{norm_var(instr.right)})")
+            op = _op_norm(getattr(instr, "op", ""))
+            dst = enc.norm_atom(getattr(instr, "dest", None), role="dst")
+            left = enc.norm_atom(getattr(instr, "left", None), role="lhs")
+            right = enc.norm_atom(getattr(instr, "right", None), role="rhs")
+
+            # 交换律规范化（只在 commutative ops）
+            if op in COMMUTATIVE_OPS:
+                a, b = sorted([left, right])
+                left, right = a, b
+
+            toks.append(f"BIN({op},{dst},{left},{right})")
 
         elif cname == "IRCall":
-            arity = len(getattr(instr, "args", []) or [])
-            tokens.append(f"CALL({norm_callee(instr.callee)},{arity},{norm_var(instr.dest)})")
+            callee = enc.norm_callee(getattr(instr, "callee", ""), keep=keep_callee, l1=l1)
+            args = list(getattr(instr, "args", []) or [])
+            arity = len(args)
+
+            # L2：保留参数“形态序列”，但不引入具体变量名/编号；L1：只保留 arity
+            if l1:
+                ret = enc.norm_atom(getattr(instr, "dest", None), role="ret")
+                toks.append(f"CALL({callee},A{arity},{ret})")
+            else:
+                ret = enc.norm_atom(getattr(instr, "dest", None), role="ret")
+                arg_shapes = ",".join(enc.shape_atom(a) for a in args)
+                toks.append(f"CALL({callee},A{arity},{ret},[{arg_shapes}])")
 
         else:
-            # unknown/extended IR instructions
-            tokens.append(f"OTHER({cname})")
+            toks.append(f"OTHER({cname})")
 
-    s = "|".join(tokens).encode("utf-8")
-    return hashlib.md5(s).hexdigest()
+    return toks
 
 
-def format_ir(ir_instrs: List[Any], max_lines: int = 200) -> str:
-    out: List[str] = []
-    for i, instr in enumerate(ir_instrs[:max_lines]):
-        cname = instr.__class__.__name__
-        if cname == "IRAssign":
-            out.append(f"{i:04d}: {instr.target} := {instr.src}")
-        elif cname == "IRBinOp":
-            out.append(f"{i:04d}: {instr.dest} := {instr.left} {instr.op} {instr.right}")
-        elif cname == "IRCall":
-            args = ", ".join(instr.args)
-            out.append(f"{i:04d}: {instr.dest+' := ' if instr.dest else ''}{instr.callee}({args})")
-        elif cname == "IRBranchCond":
-            out.append(f"{i:04d}: IF {instr.cond} THEN GOTO {instr.true_label} ELSE GOTO {instr.false_label}")
-        elif cname == "IRLabel":
-            out.append(f"{i:04d}: LABEL {instr.name}")
+def compute_skeleton_id_v2(ir_instrs: List[Any], *, keep_callee_l2: bool = True) -> Dict[str, str]:
+    """
+    返回两级 skeleton：
+      - skeleton_id_l2：严格
+      - skeleton_id_l1：松（用于分层桶兜底）
+    """
+    t2 = _compute_skeleton_tokens(ir_instrs, keep_callee=keep_callee_l2, l1=False)
+    t1 = _compute_skeleton_tokens(ir_instrs, keep_callee=False, l1=True)
+
+    s2 = "|".join(t2).encode("utf-8")
+    s1 = "|".join(t1).encode("utf-8")
+    return {
+        "skeleton_id_l2": hashlib.md5(s2).hexdigest(),
+        "skeleton_id_l1": hashlib.md5(s1).hexdigest(),
+    }
+
+
+def ir_to_tokens_v2(ir_instrs: List[Any], *, keep_callee_l2: bool = True) -> Dict[str, List[str]]:
+    """
+    输出三套序列：
+      - ir_tokens_l2：严格归一化（用于主桶）
+      - ir_tokens_l1：松归一化（用于兜底桶）
+      - ir_tokens_raw：弱归一化（保留更多信息，便于排查/可视化）
+    """
+    t2 = _compute_skeleton_tokens(ir_instrs, keep_callee=keep_callee_l2, l1=False)
+    t1 = _compute_skeleton_tokens(ir_instrs, keep_callee=False, l1=True)
+
+    # raw 还是按你原逻辑，便于定位问题
+    raw_seq: List[str] = []
+    for ins in ir_instrs:
+        cname = ins.__class__.__name__
+        if cname == "IRLabel":
+            raw_seq.append(f"LABEL({ins.name})")
         elif cname == "IRGoto":
-            out.append(f"{i:04d}: GOTO {instr.target_label}")
+            raw_seq.append(f"GOTO({ins.target_label})")
+        elif cname == "IRBranchCond":
+            raw_seq.append(f"BR({getattr(ins,'cond',None)},{ins.true_label},{ins.false_label})")
+        elif cname == "IRAssign":
+            raw_seq.append(f"ASSIGN({getattr(ins,'target',None)},{getattr(ins,'src',None)})")
+        elif cname == "IRBinOp":
+            raw_seq.append(f"BIN({getattr(ins,'op','')},{getattr(ins,'dest',None)},{getattr(ins,'left',None)},{getattr(ins,'right',None)})")
+        elif cname == "IRCall":
+            args = list(getattr(ins, "args", []) or [])
+            raw_seq.append(f"CALL({getattr(ins,'callee','')},{len(args)},{getattr(ins,'dest',None)},{','.join(args)})")
         else:
-            out.append(f"{i:04d}: {cname} {instr.__dict__}")
-    if len(ir_instrs) > max_lines:
-        out.append(f"... ({len(ir_instrs)-max_lines} more)")
-    return "\n".join(out)
+            raw_seq.append(f"OTHER({cname})")
 
+    return {
+        "ir_tokens_l2": t2,
+        "ir_tokens_l1": t1,
+        "ir_tokens_raw": raw_seq,
+    }
+
+
+# ============================================================
+# Stats (保持你原样)
+# ============================================================
 def ir_stats(ir_instrs: List[Any]) -> Dict[str, int]:
     def is_type(x, name: str) -> bool:
         return x.__class__.__name__ == name
-
     return {
         "n_ir_label": sum(1 for ins in ir_instrs if is_type(ins, "IRLabel")),
         "n_ir_goto": sum(1 for ins in ir_instrs if is_type(ins, "IRGoto")),
@@ -292,21 +471,15 @@ def ir_stats(ir_instrs: List[Any]) -> Dict[str, int]:
 
 
 def cfg_extra_stats(cfg) -> Dict[str, int]:
-    # 边数
     n_edges = sum(len(v) for v in cfg.succ.values()) if getattr(cfg, "succ", None) else 0
-
-    # 回边：用一个简单、稳定的判据（succ 节点编号 <= 当前节点编号）
-    # 这与你之前的思路一致，也便于论文复现。
     back_edges = 0
     if getattr(cfg, "succ", None):
         for i, succs in cfg.succ.items():
             for j in succs:
                 if j <= i:
                     back_edges += 1
-
-    n_nodes = len(getattr(cfg, "instrs", []))  # 指令级 CFG
+    n_nodes = len(getattr(cfg, "instrs", []))
     n_exits = len(getattr(cfg, "exits", [])) if getattr(cfg, "exits", None) is not None else 0
-
     return {
         "n_cfg_nodes": n_nodes,
         "n_cfg_edges": n_edges,
@@ -316,7 +489,6 @@ def cfg_extra_stats(cfg) -> Dict[str, int]:
 
 
 def defuse_extra_stats(du) -> Dict[str, int]:
-    # du.def_vars / du.use_vars: List[Set[str]]
     def_vars = getattr(du, "def_vars", [])
     use_vars = getattr(du, "use_vars", [])
 
@@ -329,14 +501,13 @@ def defuse_extra_stats(du) -> Dict[str, int]:
     for s in use_vars:
         uniq_all |= set(s)
 
-    # 去掉临时变量 t\d+ 和常量（按你现有 _is_const/_is_temp 规则）
     uniq_prog = set()
     for v in uniq_all:
         if v is None:
             continue
-        if _is_temp(v):
+        if _is_temp(str(v)):
             continue
-        if _is_const(v):
+        if _is_const(str(v)):
             continue
         uniq_prog.add(v)
 
@@ -354,124 +525,34 @@ def pdg_extra_stats(pdg) -> Dict[str, int]:
     return {"n_pdg_data_edges": n_data_edges, "n_pdg_ctrl_edges": n_ctrl_edges}
 
 
-# Demo AST (no parser needed)
-def build_demo_pou(ast_nodes_mod):
-    """
-    Handcrafted AST to test the IR/CFG/DU/PDG pipeline without parsing.
-
-    Program demo:
-      A := 1;
-      IF (A < 3) THEN
-        B := A + 1;
-      ELSE
-        B := 0;
-      END_IF;
-      WHILE (B < 5) DO
-        B := B + 1;
-      END_WHILE;
-    """
-    SourceLocation = getattr(ast_nodes_mod, "SourceLocation")
-    ProgramDecl = getattr(ast_nodes_mod, "ProgramDecl")
-    VarDecl = getattr(ast_nodes_mod, "VarDecl")
-
-    Assignment = getattr(ast_nodes_mod, "Assignment")
-    IfStmt = getattr(ast_nodes_mod, "IfStmt")
-    WhileStmt = getattr(ast_nodes_mod, "WhileStmt")
-
-    VarRef = getattr(ast_nodes_mod, "VarRef")
-    Literal = getattr(ast_nodes_mod, "Literal")
-    BinOp = getattr(ast_nodes_mod, "BinOp")
-
-    # 注意：参数名是 column，不是 col
-    loc = SourceLocation(file="<demo>", line=1, column=0)
-
-    # 注意：VarDecl字段是 name/type/storage/init_expr/loc
-    vars_ = [
-        VarDecl(name="A", type="INT", storage="VAR", init_expr=None, loc=loc),
-        VarDecl(name="B", type="INT", storage="VAR", init_expr=None, loc=loc),
-    ]
-
-    # 注意：Literal需要 type 字段（这里用 INT）
-    stmt1 = Assignment(
-        target=VarRef(name="A", loc=loc),
-        value=Literal(value=1, type="INT", loc=loc),
-        loc=loc
-    )
-
-    cond_if = BinOp(
-        op="<",
-        left=VarRef(name="A", loc=loc),
-        right=Literal(value=3, type="INT", loc=loc),
-        loc=loc
-    )
-
-    then_stmt = Assignment(
-        target=VarRef(name="B", loc=loc),
-        value=BinOp(
-            op="+",
-            left=VarRef(name="A", loc=loc),
-            right=Literal(value=1, type="INT", loc=loc),
-            loc=loc
-        ),
-        loc=loc
-    )
-
-    else_stmt = Assignment(
-        target=VarRef(name="B", loc=loc),
-        value=Literal(value=0, type="INT", loc=loc),
-        loc=loc
-    )
-
-    # IfStmt: cond/then_body/elif_branches/else_body/loc
-    stmt2 = IfStmt(
-        cond=cond_if,
-        then_body=[then_stmt],
-        elif_branches=[],
-        else_body=[else_stmt],
-        loc=loc
-    )
-
-    cond_while = BinOp(
-        op="<",
-        left=VarRef(name="B", loc=loc),
-        right=Literal(value=5, type="INT", loc=loc),
-        loc=loc
-    )
-
-    body_while = Assignment(
-        target=VarRef(name="B", loc=loc),
-        value=BinOp(
-            op="+",
-            left=VarRef(name="B", loc=loc),
-            right=Literal(value=1, type="INT", loc=loc),
-            loc=loc
-        ),
-        loc=loc
-    )
-
-    stmt3 = WhileStmt(cond=cond_while, body=[body_while], loc=loc)
-
-    # ProgramDecl: name/vars/body/loc
-    return ProgramDecl(name="DEMO", vars=vars_, body=[stmt1, stmt2, stmt3], loc=loc)
-
-# End-to-end pipeline
-def run_pipeline_on_pou(pou: Any, mods: Dict[str, Any], source_file: str = "") -> Dict[str, Any]:
+# ============================================================
+# Pipeline
+# ============================================================
+def run_pipeline_on_pou(pou: Any, mods: Dict[str, Any], source_file: str) -> Dict[str, Any]:
     IRBuilder = getattr(mods["ir_builder"], "IRBuilder")
     CFGBuilder = getattr(mods["cfg_builder"], "CFGBuilder")
     DefUseAnalyzer = getattr(mods["def_use"], "DefUseAnalyzer")
     PDGBuilder = getattr(mods["pdg_builder"], "PDGBuilder")
     build_program_dependence_graph = getattr(mods["pdg_builder"], "build_program_dependence_graph")
 
+    pou_name = getattr(pou, "name", "<POU>")
+    sample_id = hashlib.md5(f"{source_file}::{pou_name}".encode("utf-8")).hexdigest()
+
     # 1) AST -> IR
-    irb = IRBuilder(pou_name=getattr(pou, "name", "<POU>"))
+    irb = IRBuilder(pou_name=pou_name)
     for s in getattr(pou, "body", []):
         irb.lower_stmt(s)
 
     ir_instrs = irb.instrs
-    skeleton_id = compute_skeleton_id(ir_instrs, keep_callee=True)
-
-    # IR stats
-    s_ir = ir_stats(ir_instrs)
+    if not ir_instrs:
+        return {
+            "sample_id": sample_id,
+            "source_file": source_file,
+            "pou_name": pou_name,
+            "skeleton_id_l2": None,
+            "skeleton_id_l1": None,
+            "error": "EMPTY_IR",
+        }
 
     # 2) IR -> CFG
     cfg = CFGBuilder(ir_instrs).build()
@@ -483,10 +564,14 @@ def run_pipeline_on_pou(pou: Any, mods: Dict[str, Any], source_file: str = "") -
 
     # 4) CFG + DU -> PDG
     pdg = PDGBuilder(cfg, du).build()
-    _ = build_program_dependence_graph(ir_instrs, pdg, du)  # 你如果不需要 predecessors 查询，可不返回
+    _ = build_program_dependence_graph(ir_instrs, pdg, du)
     s_pdg = pdg_extra_stats(pdg)
 
-    # 结构统计向量（用于 kNN 回退/距离度量）
+    # skeleton & tokens（放在 CFG/DU 后面也不冲突，方便你后续扩展“基于DU的角色识别”）
+    sk = compute_skeleton_id_v2(ir_instrs, keep_callee_l2=KEEP_CALLEE_L2)
+    tok = ir_to_tokens_v2(ir_instrs, keep_callee_l2=KEEP_CALLEE_L2)
+    s_ir = ir_stats(ir_instrs)
+
     z_vec = {
         "n_instr": len(ir_instrs),
         "n_cfg_edges": s_cfg["n_cfg_edges"],
@@ -496,141 +581,101 @@ def run_pipeline_on_pou(pou: Any, mods: Dict[str, Any], source_file: str = "") -
         "n_pdg_ctrl_edges": s_pdg["n_pdg_ctrl_edges"],
         "n_def_sites": s_du["n_def_sites"],
         "n_use_sites": s_du["n_use_sites"],
-        "n_unique_vars_prog": s_du["n_unique_vars_prog"],
+        "n_unique_vars_prog": s_du["n_unique_vars_prog"],       
     }
+    bucket_z = compute_bucket_z(z_vec, n_ir_call=s_ir["n_ir_call"])
 
-    # 统一输出
     out = {
-        # 追溯信息
+        "sample_id": sample_id,
         "source_file": source_file,
-        "pou_name": getattr(pou, "name", "<POU>"),
-
-        # 核心签名
-        "skeleton_id": skeleton_id,
-
-        # 统计信息（建议全部保留，后续做消融/筛选/配对都会用到）
+        "pou_name": pou_name,
+        "bucket_z": bucket_z, 
+        **sk,              # skeleton_id_l2 / skeleton_id_l1
         **s_ir,
         **s_cfg,
         **s_du,
         **s_pdg,
-
-        # 用于近邻配对的结构向量
         "z_vec": z_vec,
-
-        # 打印调试用（默认打印时用；写 jsonl 时建议丢弃）
-        "ir_preview": format_ir(ir_instrs, max_lines=200),
-        "cfg_entry": getattr(cfg, "entry", None),
-        "cfg_exits": sorted(list(getattr(cfg, "exits", []))) if getattr(cfg, "exits", None) is not None else [],
+        **tok,             # ir_tokens_l2 / ir_tokens_l1 / ir_tokens_raw
     }
-
     return out
 
 
-
-def iter_st_files(st_path: Optional[str], st_dir: Optional[str], glob_pat: str) -> List[str]:
-    if st_path:
-        return [st_path]
-    if st_dir:
-        out = []
-        for root, _, files in os.walk(st_dir):
-            for f in files:
-                if fnmatch.fnmatch(f, glob_pat):
-                    out.append(os.path.join(root, f))
-        return sorted(out)
-    return []
-
-# 配置：直接在这里改路径即可
-FIXED_DIR = Path(r"F:\study\postgtaduate\AIPython\st_code\Mix_code\failed_only")  # 你的 fixedCode 目录
-IN_DIR = FIXED_DIR                      # 输入：递归读取该目录下所有 .st
-OUT_JSONL = FIXED_DIR / "dataset.jsonl" # 输出：成功的 POU 写到这里
-FAILED_TXT = FIXED_DIR / "failed_parse.txt"  # 输出：解析失败文件清单写到这里
-EXT = ".st"                             # 处理后缀
-QUIET = False                           # True 就少打印
+def iter_st_files(in_dir: str, glob_pat: str) -> List[str]:
+    out: List[str] = []
+    for root, _, files in os.walk(in_dir):
+        for f in files:
+            if fnmatch.fnmatch(f, glob_pat):
+                out.append(os.path.join(root, f))
+    return sorted(out)
 
 
 def main():
     mods = resolve_project_modules()
 
-    if not IN_DIR.exists():
-        raise SystemExit(f"IN_DIR not found: {IN_DIR}")
+    files = iter_st_files(IN_DIR, GLOB_PAT)
+    if not files:
+        raise SystemExit(f"No .st files found in: {IN_DIR}")
 
-    # 收集失败项：建议写“相对路径 + 错误摘要”，方便你回头定位
-    failed_items: List[str] = []
+    failed_lines: List[str] = []
+    ok = 0
+    parse_failed = 0
+    parse_empty = 0
+    empty_ir = 0
+    total_pou = 0
 
-    # 统计
-    n_files_total = 0
-    n_files_failed = 0
-    n_pous_ok = 0
-    n_pous_failed = 0
-
-    # 确保输出目录存在
-    FIXED_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 流式写 jsonl：边解析边写，避免 results 太大
     with open(OUT_JSONL, "w", encoding="utf-8") as wf:
-        # 递归遍历 .st
-        for fp in sorted(IN_DIR.rglob(f"*{EXT}")):
-            if not fp.is_file():
+        for fp in files:
+            try:
+                txt = open(fp, "r", encoding="utf-8", errors="ignore").read()
+            except Exception as e:
+                failed_lines.append(f"{os.path.relpath(fp, IN_DIR)}\tREAD_ERROR: {e}")
+                parse_failed += 1
                 continue
 
-            n_files_total += 1
-            rel = str(fp.relative_to(IN_DIR))
-
             try:
-                txt = fp.read_text(encoding="utf-8", errors="ignore")
+                pous = parse_st_to_pous(txt, filename=fp)
             except Exception as e:
-                n_files_failed += 1
-                failed_items.append(f"{rel}\tREAD_ERROR: {str(e).replace('\n',' ')[:500]}")
-                continue
-
-            # 关键：解析失败不中断
-            try:
-                pous = parse_st_to_pous(txt, filename=str(fp))
-            except Exception as e:
-                n_files_failed += 1
-                failed_items.append(f"{rel}\tPARSE_ERROR: {str(e).replace('\n',' ')[:500]}")
+                failed_lines.append(f"{os.path.relpath(fp, IN_DIR)}\tPARSE_ERROR: {e}")
+                parse_failed += 1
                 continue
 
             if not pous:
-                n_files_failed += 1
-                failed_items.append(f"{rel}\tPARSE_EMPTY: no POU returned")
+                failed_lines.append(f"{os.path.relpath(fp, IN_DIR)}\tPARSE_EMPTY: no POU returned")
+                parse_empty += 1
                 continue
 
-            # 单个 POU 的 IR/CFG/PDG pipeline 也可能失败：同样不中断
             for pou in pous:
+                total_pou += 1
                 try:
-                    r = run_pipeline_on_pou(pou, mods, source_file=str(fp))
-
-                    # 丢弃调试字段（训练/配对不需要）
-                    rr = dict(r)
-                    rr.pop("ir_preview", None)
-                    rr.pop("cfg_entry", None)
-                    rr.pop("cfg_exits", None)
-
-                    wf.write(json.dumps(rr, ensure_ascii=False) + "\n")
-                    n_pous_ok += 1
-
-                    if not QUIET:
-                        print(f"[OK] {rel} :: POU={rr.get('pou_name')} skeleton_id={rr.get('skeleton_id')}")
-
+                    rec = run_pipeline_on_pou(pou, mods, source_file=fp)
                 except Exception as e:
-                    n_pous_failed += 1
-                    failed_items.append(f"{rel}\tPIPELINE_ERROR: {str(e).replace('\n',' ')[:500]}")
+                    failed_lines.append(f"{os.path.relpath(fp, IN_DIR)}\tPIPELINE_ERROR: {e}")
+                    parse_failed += 1
                     continue
 
-    # 写 failed_parse.txt（放在 fixedCode 目录）
-    if failed_items:
-        FAILED_TXT.write_text("\n".join(failed_items) + "\n", encoding="utf-8", errors="ignore")
+                if rec.get("error") == "EMPTY_IR":
+                    failed_lines.append(f"{os.path.relpath(fp, IN_DIR)}\tEMPTY_IR: no IR instrs")
+                    empty_ir += 1
+                    continue
 
-    if not QUIET:
-        print("\nDone.")
-        print(f"IN_DIR          : {IN_DIR}")
-        print(f"OUT_JSONL       : {OUT_JSONL}")
-        print(f"FAILED_TXT      : {FAILED_TXT}")
-        print(f"Total .st files : {n_files_total}")
-        print(f"Failed files    : {n_files_failed}")
-        print(f"POU ok          : {n_pous_ok}")
-        print(f"POU failed      : {n_pous_failed}")
+                wf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                ok += 1
+
+    with open(FAILED_TXT, "w", encoding="utf-8") as f:
+        f.write("\n".join(failed_lines))
+
+    print("Done.")
+    print(f"IN_DIR          : {IN_DIR}")
+    print(f"OUT_JSONL       : {OUT_JSONL}")
+    print(f"FAILED_TXT      : {FAILED_TXT}")
+    print(f"Total .st files : {len(files)}")
+    print(f"Total POU found : {total_pou}")
+    print(f"POU ok (written): {ok}")
+    print(f"PARSE_EMPTY     : {parse_empty}")
+    print(f"PARSE_ERROR     : {parse_failed}")
+    print(f"EMPTY_IR        : {empty_ir}")
+
 
 if __name__ == "__main__":
     main()
